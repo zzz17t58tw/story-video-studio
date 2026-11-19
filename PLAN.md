@@ -59,6 +59,8 @@
 - M5 生影片：鏡頭 → H3 導演台（送 API 或匯出 mmxpack），回填影片
 - M6 合併：ffmpeg concat → final.mp4
 - M7 打包與打磨：啟動器、設定頁、匯出/匯入專案
+- M10 修正批次（每個 bug 一個分支切片，編號 M10a、M10b…）：目前追蹤中的 bug 見 `docs/TODO-backlog.md`
+  - M10a 燈箱關閉鈕失效（`bindLightboxEvents` 在 `#lightbox` 存在前就執行，事件從未綁上）
 
 ## 技術選型（固定，子代理不得自行更換）
 

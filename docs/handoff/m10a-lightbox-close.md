@@ -1,5 +1,5 @@
 ---
-branch: m10a-lightbox-close
+branch: feat/m10a-lightbox-close
 milestone: M10a
 status: ready            # wip | ready | merged
 opened: 2026-11-19 11:47（台北）

@@ -167,9 +167,19 @@ def check_one(d: dict) -> list[str]:
         elif not d["sections"][sec].strip():
             problems.append(f"段落「## {sec}」是空的")
 
-    # 模板佔位符殘留
+    # 模板佔位符殘留（排除 HTML 標籤：含空白／=／斜線／引號，或常見 tag 名）
     if "<" in d["raw"] and ">" in d["raw"]:
-        leftovers = re.findall(r"<[^<>\n]{2,40}>", d["raw"])
+        HTML_TAGS = {
+            "head", "body", "script", "style", "div", "span", "img", "a", "p", "br",
+            "td", "tr", "table", "html", "button", "input", "section", "link", "meta",
+        }
+        cands = re.findall(r"<([^<>\n]{2,40})>", d["raw"])
+        leftovers = [
+            f"<{c}>"
+            for c in cands
+            if not any(ch in c for ch in " =/\"'")
+            and c.split()[0].lower() not in HTML_TAGS
+        ]
         if leftovers:
             problems.append(f"還有模板佔位符未填：{leftovers[:3]}")
 
