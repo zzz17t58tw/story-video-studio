@@ -1,5 +1,11 @@
 # Story Video Studio（1117）
 
+> **版本：v0.9.0**（預發版）　·　版號來源：`VERSION`　·　**版本紀錄見 [`CHANGELOG.md`](CHANGELOG.md)**
+>
+> 三個位置的分工、一鍵發佈流程與回滾方式見 [`docs/VERSIONING.md`](docs/VERSIONING.md)：
+> 根目錄＝源碼｜`dist/StoryVideoStudio/`＝**你日常在用的 exe（資料在此，絕不清空 projects）**｜`release/`＝乾淨發佈包。
+> 發佈新版只要跑 `python tools/release.py`。
+
 故事 → 分鏡 → 影片 一體化製作程式。主線與里程碑見 `PLAN.md`。
 **本輪＝M3a：模型對話基礎層（OpenAI 相容 client、chat / apply API、模型狀態）＋ 故事／人物／場景三頁的「✦ 與模型對話」抽屜。**（M2a 人物卡／場景卡、M2b 劇本／鏡頭已完成）
 
