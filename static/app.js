@@ -492,16 +492,19 @@ function confirmDeleteWithRefs(title, refs) {
 // ── 上傳 ─────────────────────────────────────────────────
 let lightboxEl = null;
 function bindLightbox() {
-  if (lightboxEl) return;
-  lightboxEl = $("#lightbox");
+  // 只在真的取到節點時才快取；否則下次呼叫重試（DOM 尚未就緒時不留下 null 快取）
+  if (lightboxEl && lightboxEl.isConnected) return lightboxEl;
+  lightboxEl = document.getElementById("lightbox");
+  return lightboxEl;
 }
 
 function openLightbox(src, caption) {
-  if (!lightboxEl) bindLightbox();
-  if (!lightboxEl) { window.open(src, "_blank"); return; }
-  lightboxEl.querySelector("img").src = src;
-  lightboxEl.querySelector(".lb-caption").textContent = caption || "";
-  lightboxEl.classList.remove("hidden");
+  // 快取可能失效（節點被重建）或從未取到，一律重試；bindLightbox 本身已處理空值
+  const box = bindLightbox();
+  if (!box) { window.open(src, "_blank"); return; }
+  box.querySelector("img").src = src;
+  box.querySelector(".lb-caption").textContent = caption || "";
+  box.classList.remove("hidden");
 }
 
 async function uploadFiles(slug, kind, fileList) {
@@ -5036,18 +5039,23 @@ function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
-// 燈箱關閉行為（掛在 app.js 最後；M2a）
-(function bindLightboxEvents() {
+// 燈箱關閉行為（M2a；M10a 修正）
+// 注意：app.js 在 <head> 尾端被載入，執行當下 #lightbox 還在 <body> 下方尚未解析，
+// 因此不能在此時 getElementById 後直接綁定（會拿不到節點而靜默跳過）。
+// 一律改成 document 層事件委派，目標節點存在與否都不影響。
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (!t || typeof t.closest !== "function") return;
   const box = document.getElementById("lightbox");
-  if (!box) return;
-  const close = () => box.classList.add("hidden");
-  box.addEventListener("click", (e) => {
-    if (e.target === box || e.target.classList.contains("lb-close")) close();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") close();
-  });
-})();
+  if (!box || box.classList.contains("hidden")) return;
+  // 關閉鈕或其內層、或直接點在燈箱背景（非圖片/說明文字）上 → 關閉
+  if (t.closest(".lb-close") || t === box) box.classList.add("hidden");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const box = document.getElementById("lightbox");
+  if (box && !box.classList.contains("hidden")) box.classList.add("hidden");
+});
 // 頁內確認框（M2a）：刪人物/場景前列出引用明細；回傳 Promise<boolean>
 (function svsConfirmModule() {
   function SVSConfirm({ title, refs }) {
