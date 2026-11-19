@@ -4,9 +4,9 @@
 |---|---|
 | 版本 | **0.9.0**（預發版） |
 | 日期 | 2026-11-19 |
-| 發佈時間 | 2026-11-19 10:13:36（台北） |
-| build 時間 | 2026-11-19 10:13:18 |
-| git HEAD（發佈前） | ceb832a 初始提交：Story Video Studio 源碼納入版控（v0.9.0 基線） |
+| 發佈時間 | 2026-11-19 10:15:24（台北） |
+| build 時間 | 2026-11-19 10:15:16 |
+| git HEAD（發佈前） | c2dc0e4 release: v0.9.0 同步使用端 exe＋重建乾淨版 |
 | 產生工具 | `tools/release.py` |
 
 ## 產物與雜湊
@@ -14,7 +14,7 @@
 | 用途 | 路徑 | 大小 | SHA-256 |
 |---|---|---|---|
 | exe（使用端） | `dist/StoryVideoStudio/StoryVideoStudio.exe` | 8.5 MB | `b1ccbad303b9538f363ead412180afbfb5b788d09e5ff3ed746c89b6d13c7685` |
-| 乾淨版 zip | `release\StoryVideoStudio-v0.9.0-乾淨版.zip` | 90.0 MB（94,388,485 B） | `4147338c5bfbffd3be0e094a9f6db2c23fcce0b823221bd2ca4033925ca64d5d` |
+| 乾淨版 zip | `release\StoryVideoStudio-v0.9.0-乾淨版.zip` | 90.0 MB（94,387,320 B） | `dc919b6199c99aac15e70e1530fb97d0f720119c71bb630de3847bf5fce01f9a` |
 
 舊 exe 備份：`dist/StoryVideoStudio/StoryVideoStudio.exe.bak-0.9.0`（回滾用，可直接改回原名）
 

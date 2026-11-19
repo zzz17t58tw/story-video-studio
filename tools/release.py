@@ -45,6 +45,9 @@ VERSION_FILE = ROOT / "VERSION"
 CHANGELOG = ROOT / "CHANGELOG.md"
 NOTES_DIR = ROOT / "docs"
 REQUIRED_CLEAN_TOP = ["StoryVideoStudio.exe", "_internal", "projects", "使用說明.txt"]
+# --skip-build 時，打包產物允許的最大時效（小時）。dist 裡的 projects 一旦被刪就回不來，
+# 舊產物每多留一天，就多一天「有人以為 --skip-build 會重新打包」的誤解風險。
+SKIP_BUILD_MAX_AGE_H = 24
 
 VENV_DIR = ROOT / ".venv"
 VENV_PY = VENV_DIR / "Scripts" / "python.exe" if os.name == "nt" else VENV_DIR / "bin" / "python"
@@ -415,10 +418,14 @@ def main() -> int:
 
     # 2) 打包
     if args.skip_build:
-        step(2, "打包：略過（--skip-build，使用上一次打包的 build/release-work 產出）")
-        build_time = datetime.fromtimestamp(
-            (WORK_DIR / NAME / f"{NAME}.exe").stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        info(f"現有打包 mtime = {build_time}")
+        exe_prev = WORK_DIR / NAME / f"{NAME}.exe"
+        age_h = (time.time() - exe_prev.stat().st_mtime) / 3600
+        step(2, "打包：略過（--skip-build，使用 build/release-work 上一次的產出）")
+        build_time = datetime.fromtimestamp(exe_prev.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        info(f"產出 mtime = {build_time}（{age_h:.1f} 小時前）")
+        if age_h > SKIP_BUILD_MAX_AGE_H:
+            fail(f"--skip-build 的產物已超過 {SKIP_BUILD_MAX_AGE_H} 小時，為避免發佈到舊 exe，"
+                 f"請改跑完整打包（不加 --skip-build）")
     else:
         step(2, "打包 PyInstaller（.venv\\Scripts\\pyinstaller --noconfirm --distpath build/release-work StoryVideoStudio.spec）")
         t0 = time.time()
@@ -475,3 +482,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n已中止")
         sys.exit(130)
+
