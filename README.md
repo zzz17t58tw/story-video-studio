@@ -195,14 +195,15 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 app/          FastAPI 後端（storage / llm / comfy / imagegen / h3gen / deploy / assemble / h3compose）
 static/       前端（純 HTML/CSS/JS，無 build、無 CDN）
 templates/    ComfyUI 工作流模板（Qwen 生圖、MOSS 生圖、H3 導演台）
-docs/         data-model.md、contracts.md、VERSIONING.md、RELEASE-NOTES、研究報告
-tools/        release.py（一鍵打包發佈）、make_icon.py
+docs/         契約與流程文件（data-model、contracts、BRANCH-WORKFLOW、VERSIONING、handoff/）
+tools/        release.py（一鍵打包發佈）、verify_release.py、handoff.py（分支交接單）、make_icon.py
 launcher.py   桌面啟動器（pywebview + 內嵌 uvicorn）
 projects/     使用者資料（不進版控）
 ```
 
 - 資料模型：[`docs/data-model.md`](docs/data-model.md)
 - 下游 ComfyUI 契約（實測）：[`docs/contracts.md`](docs/contracts.md)
+- 分支協作規矩（多對話並行）：[`docs/BRANCH-WORKFLOW.md`](docs/BRANCH-WORKFLOW.md)
 - 版本與發佈：[`docs/VERSIONING.md`](docs/VERSIONING.md)
 - 開發歷程（M1–M3 詳細紀錄）：[`docs/DEVLOG-M1-M3.md`](docs/DEVLOG-M1-M3.md)
 - 主線與里程碑：[`PLAN.md`](PLAN.md)

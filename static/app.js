@@ -1094,7 +1094,7 @@ function h3SheetCard(ch) {
   const jobState = window.__h3sheetJobs[jobKey] || (window.__h3sheetJobs[jobKey] = { jobId: "", timer: null, last: null });
   card.append(el("div", { class: "subcard-head" },
     el("h4", { text: "🎭 多角度設定表（第二層：H3 image，i2i）" })));
-  const fulls = (ch.refImages || []).filter((r) => (r.kind || "full") === "full" && r.path);
+  const fulls = (ch.refImages || []).filter((r) => (r.kind || "full") === "full" && r.path && r.source !== "h3sheet");
   const latest = fulls.length ? fulls[fulls.length - 1] : null;
   card.append(el("p", { class: "hint", text: latest
     ? `來源立繪：${latest.path.split("/").pop()}（kind=full 最新一張）。H3 會照它畫出多個角度；原圖保留。`

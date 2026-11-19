@@ -620,7 +620,8 @@ def api_generate_shot_image(slug: str, shot_id: str, body: Optional[GenerateImag
 
 
 # ── M6：生圖引擎（settings.imageEngine）＋角色立繪端點 ──────────────
-_ENGINE_LABELS = {"qwen": "Qwen Image 2.1（i2i／t2i）", "moss": "MOSS Image SFT（t2i，純文字）"}
+_ENGINE_LABELS = {"qwen": "Qwen Image 2.1（i2i／t2i）", "moss": "MOSS Image SFT（t2i，純文字）",
+                  "h3sheet": "H3 Character Sheet（多角度，i2i，很慢）"}
 
 
 @app.get("/api/projects/{slug}/image/engine")

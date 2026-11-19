@@ -13,6 +13,35 @@
 - 最終可直接匯出 `.mmxpack.zip` 給導演台匯入
 - 或由程式直接送 ComfyUI API 全自動
 
+## 目前狀態總覽（2026-11-19 11:40 更新）
+
+**版本**：`VERSION 0.9.0`（已推 GitHub `zzz17t58tw/story-video-studio`，Release v0.9.0）
+
+**北極星已達成**：整條鏈路真的跑過一次完整成片——故事 → 一鍵佈署（角色/場景/劇本/分鏡）→ MOSS 生圖 → H3 生影片 → ffmpeg 合併，產出《雨夜的便利商店》31.08 秒成片（768×1344、h264+aac、音視差 20.7ms）。
+
+| 層 | 現況 | 入口 |
+|---|---|---|
+| 故事 | 概念/大綱/章回，可擴寫、可對話改寫 | 故事頁「✦ 擴寫大綱」「🚀 一鍵佈署」 |
+| 人物 | 外型六欄＋辨識特徵＋身分錨點（Hex）＋服裝＋身世＋聲音參照＋參考圖鎖臉＋分階段造型 | 人物頁 |
+| 場景 | 描述/光線/氣氛/英文 prompt（自帶「畫面內不得有人」） | 場景頁 |
+| 劇本 | 集 → 場次 → 對白/動作，人物與場景下拉連動 | 劇本頁 |
+| 分鏡 | 鏡頭類型/角度三元組/運鏡/時長/六段式 prompt/台詞覆蓋/首尾幀 | 鏡頭頁「檢查全專案」 |
+| 生圖 | Qwen 2.1（i2i 鎖臉，參考圖可到 4 張）＋ MOSS（t2i，靠文字錨點） | 鏡頭頁「⚡ 生圖」、人物頁「生成立繪」 |
+| 生影片 | H3 導演台 r2v，原生音軌，可掛 LoRA（Pika） | 鏡頭頁「🎬 生影片」、批次 |
+| 合併 | ffmpeg，自動判斷需不需要重編碼（H3 音訊是 aac 32k） | 「生成與合併」頁 |
+| 桌面 | pywebview 原生視窗 exe，關窗即完全退出 | `dist/StoryVideoStudio/StoryVideoStudio.exe` |
+| 發佈 | `python tools/release.py` 一鍵（固定 `--distpath build/release-work`，不碰使用端 projects） | `docs/VERSIONING.md` |
+| 協作 | 分支規矩＋交接單工具（P1） | `docs/BRANCH-WORKFLOW.md`、`tools/handoff.py` |
+
+**資料現況**：`projects/` 11 個專案（含成果專案 `project-20261118-022129` 雨夜便利商店）。
+
+**已知未完成（依優先序）**
+1. `app/server.py`（1387 行）、`static/app.js`（5383 行）未拆檔 → 多分支並行必撞（backlog 已記）
+2. `.mmxpack.zip` 匯出給 AIMixer 導演台手動匯入（目前走直接 API，還沒做匯出包）
+3. 角色聲音參照尚未接進 H3 的 `<Audio J>` 槽位（現在只有 H3 原生音訊）
+4. 「雨夜便利商店」大綱結尾斷句、「一鍵佈署」的 5 個殘留畫面缺陷（sh02 櫃台位置等）
+5. C2（協作腳手架）尚未 commit — main 有 6 個未提交變更，會讓 `handoff.py` 的 git 對帳失準
+
 ## MVP 驗收標準（v0.1，不准擴張）
 
 一個專案：3 個人物、2 個場景、6 個鏡頭；
@@ -50,25 +79,44 @@
 4. 每次交付必須「實際跑起來」並貼出可驗證證據（指令輸出／截圖路徑／API 回應）。
 5. 使用者是台灣人，UI 文字一律繁體中文。
 6. 碰不動的地方停下來回報，不要用假資料充當成果。
+7. **分支紀律**：開新的分支對話前先讀 `docs/BRANCH-WORKFLOW.md`。一個分支只做一個里程碑切片、只碰自己那組檔案；收工必交 `docs/handoff/<分支名>.md`（用 `python tools/handoff.py new <分支名>` 產生）。**沒有交接單的分支視為未完成，不合併。** 契約檔（`docs/data-model.md`、`docs/contracts.md`）與本檔只有主對話能改。
+8. **主代理派子代理一律走 worktree 隔離**：`git worktree add ../1117-wt-<名> -b feat/<名>`，子代理只在那個目錄施工，做完由主代理驗收後 `git merge --no-ff`。理由：`app/server.py` 與 `static/app.js` 是單體大檔，子代理與使用者的分支對話同時改會直接撞；同一工作目錄施工是這類衝突的根源。
+9. **每輪開工前三個檢查**（10 秒）：`git status --short`、`git branch -a`、`python tools/handoff.py list`。有未合併分支或 ready 交接單時，先合併／驗收再開新工。
+
+## 分支協作（多對話並行時）
+
+- 規矩：`docs/BRANCH-WORKFLOW.md`（含檔案歸屬表、高衝突檔規則、合併檢查清單）
+- 交接單：`docs/handoff/`（模板 `_TEMPLATE.md`；五段必填，缺一不可）
+- 工具：`python tools/handoff.py new|list|check|brief`
+- 合併前一定先跑 `python tools/handoff.py check`：除了驗格式，還會用 `git diff main...<分支>` 對帳，抓出「交接單說沒改、實際卻改了」的檔案。
 
 ## 目錄結構
 
 ```
 1117/
-  PLAN.md                  <- 本檔（主線）
-  docs/                    <- contracts.md, data-model.md, TODO-backlog.md
-  app/                     <- 後端
-    server.py
-    storage.py
-    llm.py
-    comfy.py
-    assemble.py
-    routes/
-  static/                  <- 前端 index.html / app.js / style.css
+  PLAN.md                  <- 本檔（主線／任務板）
+  CHANGELOG.md             <- 版本變更紀錄
+  docs/                    <- 文件：contracts.md（外部契約）、data-model.md（資料契約）、
+                              TODO-backlog.md（雜事停車場）、BRANCH-WORKFLOW.md（分支規矩）、
+                              VERSIONING.md（發佈流程）、handoff/（分支交接單）
+  app/                     <- 後端（FastAPI）
+    server.py              <- 全部路由（🔴 高衝突檔）
+    storage.py             <- 專案資料讀寫
+    llm.py / prompts.py    <- 模型對話層
+    storygen.py / deploy.py<- 故事→分鏡生成
+    imagegen.py / comfy.py <- 生圖（Qwen / MOSS）
+    h3gen.py / h3compose.py<- 生影片（H3 導演台）
+    assemble.py            <- ffmpeg 合併
+    gpu.py / paths.py      <- 環境
+  static/                  <- 前端 index.html / app.js（🔴 5383 行，高衝突） / style.css
+  tools/                   <- release.py、verify_release.py、handoff.py、make_icon.py、mock_llm.py
   templates/               <- 從作者工作流複製來的模板（Qwen 生圖、H3 導演台）
-  projects/                <- 使用者專案資料（每個專案一資料夾）
-  start.bat
+  projects/                <- 使用者專案資料（不進 git）
+  start.bat / 啟動 Story Video Studio.bat
 ```
+
+> 🔴 高衝突檔（`app/server.py`、`static/app.js`）：同一時間只允許一個分支動同一個檔的同一區段。
+> 開工前先宣告「我要用的是哪個區段」，見 `docs/BRANCH-WORKFLOW.md` §3。
 
 ## 進度紀錄
 
@@ -94,5 +142,8 @@
 | 2026-11-18 16:20 | M7b 乾淨發佈包（zip） | ✅ 完成 | `release/StoryVideoStudio/`（112M：exe + _internal 32M + 只有雨夜便利商店 72M + 使用說明）→ `release/StoryVideoStudio-乾淨版-20261118.zip`（90M）。解壓到全新目錄實測：health 200、只有 1 專案、final.mp4 200/5,626,636B、關窗進程消失。順手修掉「exe 會把開發機 8 個測試專案 seed 到別人機器」的真 bug |
 | 2026-11-18 18:30 | M8 一鍵佈署（故事→角色/場景/劇本/分鏡） | ✅ 通過驗收 | `app/deploy.py`（四步 cast/locations/script/shots）。線上模型實跑 108 秒（角色17.1/場景14.6/劇本9.7/分鏡66.6）、產出 3 角色+2 場景+1 集+**6 鏡**（shotPlan [3,3]）、validate error 0、圖片欄位全空。修正：shotCount 改總數、覆蓋預設勾選+警示、完成摘要四顆跳頁鈕、provider 提示。主代理親驗截圖（總鏡數 6／模型來源／四顆按鈕／無重疊） |
 | 2026-11-18 18:40 | M7c 重打包 exe＋乾淨版 zip（含一鍵佈署） | ✅ 完成 | exe 8,952,439B（18:31）、release 111M、新 zip `StoryVideoStudio-乾淨版-20261118b.zip`（90MB）。解壓全新目錄實測：health 200、1 專案、final.mp4 200/5,626,636B、`_internal/static/app.js` 含「一鍵佈署」×6、「總鏡數」×2、`/api/deploy/info` 200。⚠舊 zip 保留作對照 |
+| 2026-11-19 11:10 | M9 影片加 Pika LoRA | ✅ 完成 | 走導演台原生 `loras` 欄位（**editMode=global 只讀 global.loras，只寫 segment 會被靜默忽略**→兩處都寫）。預設：pika_h3_flex_ref2va bf16/1.0、steps 6、cfg 1.0、shift 12/3、euler+simple。同 seed A/B：幀差 0.267→0.722（2.7×）、亮度 56→68、音訊 max -35.9→-15.3dB、PSNR 16.3dB。主代理看圖：同場景同人，A 較暗高對比有電影感、B 較亮細節清楚 |
 | 2026-11-19 10:30 | M9 版本管理＋GitHub 發佈 | ✅ 完成 | git repo（源碼 77 檔、排除 projects/dist/release）、`VERSION 0.9.0`、`CHANGELOG.md`、`tools/release.py`（固定 `--distpath build/release-work`，只覆寫 exe/_internal，同步前後比對專案數）、`docs/RELEASE-NOTES-v0.9.0.md`（含 sha256）。GitHub：`zzz17t58tw/story-video-studio` 已 push、Release v0.9.0 附 `StoryVideoStudio-v0.9.0-clean.zip`（94,387,320B，下載 HEAD 200 相符）、repo 內確認無 projects/dist/release |
 | 2026-11-19 10:20 | 事故：dist/projects 第二次被 PyInstaller `--noconfirm` 清空 | ⚠已補救 | 根 `projects/` 全程未動（10 專案 130MB），已全部複製回 `dist/StoryVideoStudio/projects/`；腳本已根治（見上列 M9） |
+| 2026-11-19 11:25 | P1 分支協作規矩＋交接單工具 | ✅ 完成 | 新增 `docs/BRANCH-WORKFLOW.md`（檔案歸屬表、🔴高衝突檔規則、開分支五句模板、合併檢查清單）、`docs/handoff/_TEMPLATE.md`、`tools/handoff.py`（new/list/check/brief）。實測：new 正確帶入分支名/里程碑/時間；未填模板 check 抓出 3 個問題並 exit 1；填滿後全綠 exit 0；git 對帳正確抓出「交接單列了但實際沒改」；測試檔已清理，list 歸零 |
+| 2026-11-19 11:40 | P2 狀態總覽全面更新 | ✅ 完成 | PLAN 新增「目前狀態總覽」（版本 v0.9.0／北極星達成／11 層現況表／5 項已知未完成）；防偏線加第 8、9 條（子代理一律 worktree 隔離；每輪開工前三檢查）。TODO-backlog 標記已修項。⚠仍未解：main 有 6 個未提交變更，`handoff.py` git 對帳會失準，待使用者在基線 commit 上裁示 |
