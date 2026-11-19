@@ -9,10 +9,11 @@
 | **專案根目錄** `1117/` | 源碼與文件（`app/`、`static/`、`templates/`、`tools/`、`docs/`、`PLAN.md`） | 開發時用 `start.bat`／uvicorn 跑；**git 版控只收這裡** | `projects/`（開發主資料）、`.venv/`、`build/` 都不進 git |
 | **`dist/StoryVideoStudio/`** | **你日常實際在用的 exe**（雙擊這個） | 使用者本人 | exe 與 `_internal/` 會被發佈腳本覆寫；**`projects/` 是你的資料，絕不會被清空或覆寫** |
 | **`release/StoryVideoStudio/`**＋zip | **乾淨發佈包**（給別人或帶去別台電腦） | 交件、存檔 | 只放一個成果專案《雨夜的便利商店》＋`使用說明.txt`；每次發佈整個重建 |
+| **`memory/`** | 程式自己的設定狀態（`gpu-settings.json`，`app/gpu.py` 寫入） | 程式 | 不進 git（機器相關） |
 
 一句話記法：**根目錄＝源碼、dist＝我在用的、release＝交出去的。**
 
-> 資料分離原則：`dist/StoryVideoStudio/projects/` 是使用者資料（目前 10 個專案），
+> 資料分離原則：`dist/StoryVideoStudio/projects/` 是使用者資料，
 > `release/.../projects/` 只放品質基準專案。兩邊都**不受 git 管**，備份靠整資料夾複製。
 
 ## 二、一鍵更新流程
@@ -25,7 +26,9 @@ python tools/release.py
 它會依序做（任何一步失敗就停下來並印出原因，不會留下半套）：
 
 1. 讀 `VERSION`、檢查 git 狀態（有不乾淨的變更會警告，但仍繼續；`--allow-dirty` 可省掉警告）
-2. `./.venv/Scripts/pyinstaller.exe --noconfirm StoryVideoStudio.spec` → `dist/StoryVideoStudio/`
+2. `./.venv/Scripts/pyinstaller.exe --noconfirm --distpath build/release-work StoryVideoStudio.spec` → `build/release-work/StoryVideoStudio/`
+   （**一定要 `--distpath` 導到暫存**：spec 預設輸出到 `dist/StoryVideoStudio/`，而 `--noconfirm` 會先把整個目標資料夾刪掉重寫，
+   直接打包會把使用端的 `projects/` 一起帶走。腳本已固定導到 `build/release-work`，不要手動改成打 dist。）
 3. **同步使用端**：先把舊 exe 備份成 `StoryVideoStudio.exe.bak-<版本>`，再覆寫 exe 與整包 `_internal/`；
    `dist/StoryVideoStudio/projects/` 完全不碰，發佈前後會比對專案數，數量不同就直接中止
 4. **重建乾淨版**：清空 `release/StoryVideoStudio/`，放入 exe＋`_internal/`＋`projects/project-20261118-022129`（雨夜便利商店）＋`使用說明.txt`
@@ -37,7 +40,7 @@ python tools/release.py
 
 | 參數 | 用途 |
 |---|---|
-| `--skip-build` | 不重跑 PyInstaller，用 dist 現有 exe 只重建使用端／乾淨版／zip（改說明檔或只改文件時） |
+| `--skip-build` | 不重跑 PyInstaller，用 `build/release-work` 上一次的產出只重建使用端／乾淨版／zip（改說明檔或只改文件時）；>24 小時的舊產物會被拒絕 |
 | `--version 0.9.1` | 本次標記成 0.9.1，但**不改** `VERSION` 檔（臨時標記用，建議正式發佈前還是改 `VERSION`） |
 | `--no-zip` | 跳過壓 zip（快速驗證） |
 | `--no-commit` | 最後不做 git commit（自己看過再提交） |
@@ -91,7 +94,7 @@ python tools/release.py           # 重新打包＋同步＋重建包
 ## 五、之後上 GitHub 的策略（下一版才會做）
 
 - **源碼進 repo**：這個根目錄就是 repo（`.gitignore` 已排除 `.venv/`、`build/`、`dist/`、`release/`、`projects/`、`memory/`、日誌、暫存）。
-  文件與 `docs/shots/` 截圖（約 11MB）一併進 repo，作為驗收證據。
+  文件與 `docs/shots/` 截圖（`docs/` 共約 10MB）一併進 repo，作為驗收證據。
 - **exe 與 zip 不進 git 歷史**：每個 90MB 的 zip 進歷史會讓 repo 迅速膨脹且無法刪除。
   做法是 GitHub **Release 附件**：每個 tag（`v0.9.0`）附上 `StoryVideoStudio-v0.9.0-乾淨版.zip`，
   正文貼 `docs/RELEASE-NOTES-v0.9.0.md`。

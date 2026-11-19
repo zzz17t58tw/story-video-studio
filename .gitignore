@@ -19,7 +19,7 @@ memory/
 *.log
 .scratch/
 
-# ── 文件：docs/ 進 repo（共約 11MB，含 docs/shots 截圖與一支對照 mp4），
+# ── 文件：docs/ 進 repo（共約 10.4MB，含 docs/shots 截圖與一支對照 mp4），
 #    小於門檻，保留可追溯的驗收證據。
 #    若日後 docs/ 超過 20MB，改為只留 .md：
 #      docs/shots/
