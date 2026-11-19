@@ -795,6 +795,9 @@ function charCard(ch) {
   }));
   wrap.append(refCard);
 
+  // 第二層：H3 多角度設定表（把上面最新的 kind=full 立繪 → 多視角 i2i）
+  wrap.append(h3SheetCard(ch));
+
   // 英文 prompt 一鍵組完後的提示
   const p = (ch.refImages || []).filter((r) => r.locked).slice(0, 3).map((r) => r.path);
   if (ch.lockedFace) {
@@ -1068,6 +1071,168 @@ function gpuProgressLine(g, extra) {
   }
   if (extra) line.append(el("span", { text: extra }));
   return line;
+}
+
+// ── 第二層：H3 多角度設定表（老臘肉的 H3 Character Sheet Designer，i2i）──────
+// 流程：角色卡最新的 kind=full 立繪（第一層 MOSS 生的）→ H3 轉成多視角設定表。
+const H3SHEET_VIEWS = [
+  ["face_front", "正面頭像"], ["face_left", "左側臉"], ["face_right", "右側臉"],
+  ["face_3q_left", "左四分之三臉"], ["body_front", "正面全身"], ["body_back", "背面全身"],
+];
+const H3SHEET_DEFAULT = ["face_front", "face_left", "face_right", "body_front", "body_back"];
+const H3SHEET_STYLES = [
+  ["none", "不指定（跟參考圖）"], ["photo", "實拍照片"], ["anime", "動畫"], ["semi_realistic_anime", "半寫實動畫"],
+  ["3d", "3D"], ["realistic_painting", "寫實繪畫"], ["oil_painting", "油畫"], ["watercolor", "水彩"],
+  ["gouache", "水粉"], ["colored_pencil", "色鉛筆"],
+];
+
+function h3SheetCard(ch) {
+  const card = el("div", { class: "subcard h3sheet-card" });
+  // 這張卡在 renderViews() 後會整個重建 → 進行中的 job 記在全域，重建後自動接回（否則進度會消失）
+  window.__h3sheetJobs = window.__h3sheetJobs || {};
+  const jobKey = `${state.slug}:${ch.id}`;
+  const jobState = window.__h3sheetJobs[jobKey] || (window.__h3sheetJobs[jobKey] = { jobId: "", timer: null, last: null });
+  card.append(el("div", { class: "subcard-head" },
+    el("h4", { text: "🎭 多角度設定表（第二層：H3 image，i2i）" })));
+  const fulls = (ch.refImages || []).filter((r) => (r.kind || "full") === "full" && r.path);
+  const latest = fulls.length ? fulls[fulls.length - 1] : null;
+  card.append(el("p", { class: "hint", text: latest
+    ? `來源立繪：${latest.path.split("/").pop()}（kind=full 最新一張）。H3 會照它畫出多個角度；原圖保留。`
+    : "這個角色還沒有全身立繪（kind=full）：請先用「生成與合併 → 角色立繪」生第一層立繪，再回來做多角度。" }));
+
+  // 視角勾選（預設五個）
+  const checks = el("div", { class: "row wrap h3sheet-views" });
+  const boxes = {};
+  for (const [key, label] of H3SHEET_VIEWS) {
+    const cb = el("input", { type: "checkbox", value: key });
+    cb.checked = H3SHEET_DEFAULT.includes(key);
+    boxes[key] = cb;
+    checks.append(el("label", { class: "checkline" }, cb, el("span", { text: label })));
+  }
+  card.append(el("label", { class: "field" }, el("span", { text: "要畫的視角（越少越快）" }), checks));
+  card.append(el("p", { class: "hint", text: "預設五個視角。視角越多畫布越寬、越慢；16GB VRAM 底下第一次含載模型可能 10–25 分鐘。想先試就只勾 1–3 個。" }));
+
+  const styleSel = el("select", {}, ...H3SHEET_STYLES.map(([v, t]) => el("option", { value: v, text: t })));
+  const cropBox = el("input", { type: "checkbox" });
+  cropBox.checked = true;
+  const optsRow = el("div", { class: "row wrap" },
+    el("span", { class: "hint", text: "風格：" }), styleSel,
+    el("label", { class: "checkline" }, cropBox, el("span", { text: "完成後自動切成單張（拼版可切就切）" })));
+  card.append(optsRow);
+
+  const status = el("p", { class: "hint", text: "" });
+  const list = el("div", { class: "gen-log hidden" });
+  const outBox = el("div", { class: "thumb-grid" });
+  const btn = el("button", { class: "btn btn-small btn-primary", type: "button", disabled: !latest },
+    "🎭 生成多角度設定表（H3）");
+  let timer = null;
+
+  // 重建卡片後把「進行中／剛完成」的 job 接回來（進度與縮圖不因 renderViews 消失）
+  if (jobState.jobId) { btn.disabled = true; }
+  if (jobState.last && jobState.last.status === "done") { /* 由下面「已生成的多角度圖」呈現 */ }
+
+  const paintResult = (j) => {
+    outBox.textContent = "";
+    const show = (path, label) => outBox.append(el("div", { class: "thumb" },
+      el("img", {
+        src: picUrl(path) + `?t=${Date.now()}`, alt: label, loading: "lazy",
+        onclick: () => openLightbox(picUrl(path), `${ch.name || ch.id} · ${label}`),
+      }),
+      el("div", { class: "thumb-bar" }, el("span", { class: "thumb-kind", text: label })),
+    ));
+    if (j.path) show(j.path, `整張設定表 ${j.width}×${j.height}`);
+    for (const c of j.crops || []) show(c.path, c.label || c.view);
+  };
+
+  const poll = async (jobId) => {
+    let j = null;
+    try {
+      const r = await api(`/api/projects/${state.slug}/characters/${ch.id}/generate/sheet/${jobId}`);
+      j = r.job;
+    } catch (e) {
+      status.className = "hint err-text";
+      status.textContent = `✕ 讀進度失敗：${e.message}`;
+      btn.disabled = false;
+      return;
+    }
+    const mins = j.startedAt ? Math.max(0, Math.round((Date.now() - new Date(j.startedAt).getTime()) / 1000)) : 0;
+    if (j.status === "queued" || j.status === "running") {
+      status.className = "hint";
+      const secs = j.elapsed || mins;
+      status.textContent = `⏳ ${j.phase || "生成中…"}（已 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒，jobId=${jobId}）`;
+      timer = setTimeout(() => poll(jobId), 3000);
+      return;
+    }
+    btn.disabled = false;
+    jobState.jobId = "";
+    if (j.status === "done") {
+      jobState.last = j;
+      status.className = "hint ok-text";
+      status.textContent = `✓ 完成（${j.elapsed} 秒，pid=${j.pid}）：${j.path}｜${j.width}×${j.height}`
+        + (j.crops && j.crops.length ? `｜已切成 ${j.crops.length} 張` : "");
+      list.classList.remove("hidden");
+      list.textContent = "";
+      for (const w of j.warnings || []) list.append(el("p", { class: "hint", text: `⚠ ${w}` }));
+      if (j.gpu && j.gpu.stoppedLlama) list.append(el("p", { class: "hint", text: `本機 LLM 已依設定還原${j.gpu.restored ? "（已啟回）" : ""}` }));
+      paintResult(j);
+      // 重新拉專案，讓 refImages 縮圖（含新圖）出現
+      try {
+        const fresh = await api(`/api/projects/${state.slug}`);
+        if (fresh && fresh.project) { state.project.characters = fresh.project.characters; }
+      } catch (_) { /* 拉不到就只顯示上面那組縮圖 */ }
+    } else {
+      status.className = "hint err-text";
+      status.textContent = `✕ ${j.error || "失敗"}`;
+    }
+  };
+
+  btn.addEventListener("click", async () => {
+    const views = H3SHEET_VIEWS.map(([k]) => k).filter((k) => boxes[k].checked);
+    if (!views.length) { alert("請至少勾一個視角"); return; }
+    if (!confirm(`要用 ${latest.path.split("/").pop()} 生成 ${views.length} 個視角的多角度設定表嗎？\n`
+      + "H3 image 很慢（16GB VRAM 可能 10–25 分鐘），期間請不要關頁面。原立繪不會被改。")) return;
+    btn.disabled = true;
+    list.classList.add("hidden");
+    outBox.textContent = "";
+    status.className = "hint";
+    status.textContent = "送出中…";
+    try {
+      const res = await api(`/api/projects/${state.slug}/characters/${ch.id}/generate/sheet`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ views, style: styleSel.value, crop: cropBox.checked }),
+      });
+      if (!res.ok) throw new Error(res.error || "送件失敗");
+      jobState.jobId = res.jobId;
+      status.textContent = `已排入背景任務（jobId=${res.jobId}）…`;
+      poll(res.jobId);
+    } catch (e) {
+      jobState.jobId = "";
+      status.className = "hint err-text";
+      status.textContent = `✕ ${e.message}`;
+      btn.disabled = false;
+    }
+  });
+  card.dataset.stopPoll = "1";
+  const stop = () => { clearTimeout(timer); };
+  card.addEventListener("DOMNodeRemovedFromDocument", stop);
+  card.__stopPoll = stop;
+  // 重建後若還有進行中的 job → 直接接回進度
+  if (jobState.jobId) { setTimeout(() => poll(jobState.jobId), 300); }
+  else if (jobState.last && jobState.last.status === "done" && !jobState.last.__painted) {
+    jobState.last.__painted = true;
+    paintResult(jobState.last);
+  }
+
+  card.append(el("div", { class: "row wrap" }, btn));
+
+  // 目前卡上的多角度設定表（整張＋裁切單張，可點開放大）
+  const done = (ch.refImages || []).filter((r) => r.source === "h3sheet");
+  if (done.length) {
+    card.append(el("h4", { text: `已生成的多角度圖（${done.length} 張）` }));
+    card.append(refImageGrid(done, { title: ch.name || ch.id, empty: "" }));
+  }
+  card.append(status, list, outBox);
+  return card;
 }
 
 // ── M6：角色立繪（正面全身／淺灰背景／完整服裝）────────────────
@@ -1983,8 +2148,14 @@ function videoGenCard(sh) {
   const adv = el("div", { class: "vg-adv hidden" });
   const errBox = el("div", { class: "vg-error hidden" });
 
-  // 進階參數（預設收合；980x864 這些是驗收過的低清快速值）
-  const params = Object.assign({ width: 480, height: 864, frames: 39, steps: 4, cfg: 1.0, seed: "" },
+  // 進階參數（預設收合）。M9：預設值跟隨 settings.video（Pika 官方建議），可在這裡單鏡覆寫。
+  const vsNow = (state.project && state.project.settings && state.project.settings.video) || {};
+  const vsLora = vsNow.lora && typeof vsNow.lora === "object" ? vsNow.lora : (VIDEO_GEN_DEFAULTS.lora || {});
+  const params = Object.assign({ width: 768, height: 1344, frames: 124,
+    steps: vsNow.steps ?? VIDEO_GEN_DEFAULTS.steps, cfg: vsNow.cfg ?? VIDEO_GEN_DEFAULTS.cfg,
+    shiftVideo: vsNow.shiftVideo ?? VIDEO_GEN_DEFAULTS.shiftVideo,
+    shiftAudio: vsNow.shiftAudio ?? VIDEO_GEN_DEFAULTS.shiftAudio,
+    seed: "", loraName: vsLora.name || "", loraStrength: vsLora.strength ?? 1.0 },
     st.params || {});
   const mk = (label, key, attrs) => {
     const inp = el("input", Object.assign({ type: "number" }, attrs));
@@ -2000,8 +2171,25 @@ function videoGenCard(sh) {
     mk("影格 frames（17k+5）", "frames", { min: "5", max: "1000", step: "1" }),
     mk("步數 steps", "steps", { min: "1", max: "60", step: "1" }),
     mk("CFG", "cfg", { min: "0", max: "30", step: "0.1" }),
+    mk("shift video", "shiftVideo", { min: "0.01", max: "100", step: "0.5" }),
+    mk("shift audio", "shiftAudio", { min: "0.01", max: "100", step: "0.5" }),
     mk("seed（留白＝隨機）", "seed", { min: "0", max: "2147483647", step: "1" }));
-  adv.append(el("p", { class: "hint", text: "480×864（9:16）＋39 影格 ≈ 1.6 秒，是實測最快的一組。影格數會自動吸附到 17k+5，長度上限 15 秒左右。" }));
+  // M9：這一鏡要用哪支 LoRA（預設跟隨設定頁；空字串＝這一鏡不掛）
+  const loraSel = el("select", {}, ...VIDEO_LORA_CHOICES.map((c) => el("option", { value: c.name, text: c.label })));
+  loraSel.value = VIDEO_LORA_CHOICES.some((c) => c.name === params.loraName) ? params.loraName : "__custom__";
+  const loraCustom = el("input", { type: "text", placeholder: "自訂 LoRA 檔名（空白＝不掛）", value: loraSel.value === "__custom__" ? (params.loraName || "") : "" });
+  loraCustom.classList.toggle("hidden", loraSel.value !== "__custom__");
+  const loraStrength = el("input", { type: "number", min: "0", max: "1.5", step: "0.05", value: String(params.loraStrength ?? 1.0) });
+  const pullLora = () => {
+    params.loraName = loraSel.value === "__custom__" ? loraCustom.value.trim() : loraSel.value;
+    params.loraStrength = Number(loraStrength.value || 1.0);
+  };
+  loraSel.addEventListener("change", () => { loraCustom.classList.toggle("hidden", loraSel.value !== "__custom__"); pullLora(); });
+  loraCustom.addEventListener("input", pullLora);
+  loraStrength.addEventListener("input", pullLora);
+  adv.append(el("label", { class: "field" }, el("span", { text: "LoRA（單鏡覆寫）" }), loraSel), loraCustom,
+    el("label", { class: "field" }, el("span", { text: "LoRA strength" }), loraStrength));
+  adv.append(el("p", { class: "hint", text: "預設 768×1344（9:16）＋124 影格 ≈ 5.2 秒。LoRA 寫進導演台 timeline 每段的 loras 欄位；空字串＝這一鏡不掛。影格數會自動吸附到 17k+5。" }));
 
   const playBox = el("div", { class: "vg-player" });
   const renderVideo = () => {
@@ -2038,8 +2226,9 @@ function videoGenCard(sh) {
     genBtn.textContent = busy ? "生成中…" : "🎬 生影片";
     if (!j) {
       status.className = "vg-status hint";
+      const vLora = sh.video && sh.video.lora;
       status.textContent = sh.video && sh.video.status === "done"
-        ? `✓ 已有影片（${sh.video.taskType || "r2v"}）` : "";
+        ? `✓ 已有影片（${sh.video.taskType || "r2v"}${vLora !== undefined ? " · " + (vLora ? "LoRA " + videoLoraLabel(vLora) : "無 LoRA") : ""}）` : "";
       bar.classList.add("hidden");
     } else if (busy) {
       status.className = "vg-status hint gen-busy-text";
@@ -2064,7 +2253,9 @@ function videoGenCard(sh) {
       bar.classList.add("hidden");
     } else if (j.status === "done") {
       status.className = "vg-status hint ok-text";
-      status.textContent = `✓ 完成：${Math.round(j.elapsed || 0)} 秒 · pid ${j.pid || "—"} · ${j.width}×${j.height} · ${j.frames} 幀`;
+      const usedLora = (j.loras || [])[0];
+      const loraTxt = usedLora ? ` · LoRA ${videoLoraLabel(usedLora.name)}@${usedLora.strength}` : " · 無 LoRA";
+      status.textContent = `✓ 完成：${Math.round(j.elapsed || 0)} 秒 · pid ${j.pid || "—"} · ${j.width}×${j.height} · ${j.frames} 幀 · steps ${j.steps ?? "—"}${loraTxt}`;
       const gdone = gpuBarText(j.gpu);
       if (gdone) status.append(el("span", { class: "gpu-inline", text: `　${gdone}` }));
       bar.classList.add("hidden");
@@ -2130,8 +2321,11 @@ function videoGenCard(sh) {
 
   genBtn.addEventListener("click", async () => {
     if (state.dirty) { try { await saveNow(); } catch (_) { /* 存檔失敗仍可試 */ } }
+    pullLora();
     const p = { width: params.width, height: params.height, frames: params.frames,
-                steps: params.steps, cfg: params.cfg };
+                steps: params.steps, cfg: params.cfg, shiftVideo: params.shiftVideo, shiftAudio: params.shiftAudio,
+                lora: params.loraName ? { name: params.loraName, strength: params.loraStrength, active: true }
+                  : { name: "", strength: 1.0, active: false } };
     if (params.seed !== "" && params.seed !== null) p.seed = params.seed;
     Object.keys(p).forEach((k) => { if (p[k] === "" || p[k] === null) delete p[k]; });
     videoJobs[sh.id] = { params, job: { status: "queued", phase: "送件中…", elapsed: 0 } };
@@ -3159,7 +3353,99 @@ function comfySettingsCard() {
   card.append(el("label", { class: "field" }, el("span", { text: "生圖引擎（settings.imageEngine）" }), engWrap));
   card.append(el("p", { class: "hint", text: "MOSS 不吃參考圖：身份靠 caption 裡的 identityAnchors 逐字描述；角色立繪請用「生成與合併 → 角色立繪」。切換後不重啟 ComfyUI，它會自己卸載舊模型載入 MOSS（第一次約 1–2 分鐘）。" }));
   card.append(engLoader);
+  // 兩層圖片生成的分工（照使用者要的順序寫清楚）
+  const layers = el("div", { class: "subcard h3sheet-layers" });
+  layers.append(el("h4", { text: "圖片生成有兩層（順序固定）" }));
+  layers.append(el("ul", { class: "layer-list" },
+    el("li", {}, el("b", { text: "第一層：單張圖 — MOSS / Qwen（文字或圖生圖）" }),
+      el("span", { class: "hint", text: " 上面這個下拉選的就是「生一張」用哪一顆：MOSS＝純文字 t2i（不吃參考圖）；Qwen＝i2i 編輯／t2i。角色立繪、鏡頭首幀都走這層，幾十秒到幾分鐘一張。" })),
+    el("li", {}, el("b", { text: "第二層：多角度 — H3 Character Sheet Designer（i2i）" }),
+      el("span", { class: "hint", text: " 角色卡上的「🎭 生成多角度設定表（H3）」：把第一層生的立繪轉成正面／側面／背面的設定表。很慢（21GB UNET＋25GB text encoder，16GB VRAM 會大量 RAM offload，實測 10–25 分鐘），也很吃記憶體；不受上面這個下拉影響，固定走 H3。" })),
+  ));
+  layers.append(el("p", { class: "hint", text: "建議順序：先用 MOSS 生一張立繪 → 覺得角度不夠，再用 H3 做多角度設定表 → 之後的鏡頭首幀可以拿設定表的某個角度當參考圖。" }));
+  card.append(layers);
   loadEngineInfo();
+  return card;
+}
+
+
+// ── M9：影片生成設定卡（settings.video：LoRA / steps / cfg / shift）──────────
+// LoRA 走導演台 timeline 每段的 loras 欄位（不是外掛 LoraLoaderModelOnly 節點）。
+const VIDEO_LORA_CHOICES = [
+  { name: "", label: "不掛 LoRA" },
+  { name: "pika_h3_flex_turbo_4step_ref2va.safetensors", label: "Pika Flex Turbo 4step Ref2VA" },
+  { name: "pika_h3_flex_ref2va_comfy_bf16.safetensors", label: "Pika Flex Ref2VA bf16" },
+  { name: "__custom__", label: "自訂檔名…" },
+];
+const VIDEO_GEN_DEFAULTS = {
+  lora: { name: "pika_h3_flex_ref2va_comfy_bf16.safetensors", strength: 1.0, active: true },
+  steps: 6, cfg: 1.0, shiftVideo: 12.0, shiftAudio: 3.0, sampler: "euler", scheduler: "simple",
+};
+
+function videoSettings() {
+  const settings = ensure_obj(state.project, "settings", {});
+  if (!settings.video || typeof settings.video !== "object") settings.video = JSON.parse(JSON.stringify(VIDEO_GEN_DEFAULTS));
+  return settings.video;
+}
+
+function videoLoraLabel(name) {
+  if (!name) return "不掛 LoRA";
+  const hit = VIDEO_LORA_CHOICES.find((c) => c.name === name);
+  return hit && hit.name !== "__custom__" ? hit.label : name;
+}
+
+function videoGenSettingsCard() {
+  const card = el("div", { class: "card" }, el("h3", { text: "影片生成（settings.video・H3 導演台）" }));
+  const vs = videoSettings();
+  const cur = vs.lora || VIDEO_GEN_DEFAULTS.lora;
+  const known = VIDEO_LORA_CHOICES.some((c) => c.name === cur.name);
+  const status = el("p", { class: "hint", text: "" });
+
+  const sel = el("select", {}, ...VIDEO_LORA_CHOICES.map((c) => el("option", { value: c.name, text: c.label })));
+  sel.value = known ? cur.name : "__custom__";
+  const custom = el("input", { type: "text", placeholder: "models/loras 下的檔名，例如 pika_h3_flex_ref2va_comfy_bf16.safetensors",
+    value: known ? "" : (cur.name || "") });
+  custom.classList.toggle("hidden", sel.value !== "__custom__");
+  const strength = el("input", { type: "number", min: "0", max: "1.5", step: "0.05", value: String(cur.strength ?? 1.0) });
+  const num = (key, min, max, step) => {
+    const i = el("input", { type: "number", min, max, step, value: String(vs[key] ?? VIDEO_GEN_DEFAULTS[key]) });
+    i.addEventListener("input", () => { vs[key] = i.value === "" ? "" : Number(i.value); markDirty(); });
+    return el("label", { class: "field" }, el("span", { text: key }), i);
+  };
+
+  const save = async () => {
+    const name = sel.value === "__custom__" ? custom.value.trim() : sel.value;
+    vs.lora = name ? { name, strength: Number(strength.value || 1.0), active: true }
+      : { name: "", strength: 1.0, active: false };
+    try {
+      const r = await api(`/api/projects/${encodeURIComponent(state.slug)}/video/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...vs, lora: vs.lora }),
+      });
+      Object.assign(vs, r.settings);
+      status.className = "hint ok-text";
+      status.textContent = `✓ 已存：${videoLoraLabel(vs.lora && vs.lora.name)} @ ${vs.lora && vs.lora.strength}｜steps ${vs.steps}｜cfg ${vs.cfg}｜shift ${vs.shiftVideo}/${vs.shiftAudio}`;
+      setSaveStatus("saved", "影片 LoRA 設定已儲存 " + clockText());
+    } catch (e) {
+      status.className = "hint err-text";
+      status.textContent = `✕ 儲存失敗：${e.message}`;
+    }
+  };
+  sel.addEventListener("change", () => {
+    custom.classList.toggle("hidden", sel.value !== "__custom__");
+    vs.lora = { name: sel.value === "__custom__" ? custom.value.trim() : sel.value,
+      strength: Number(strength.value || 1.0), active: true };
+    markDirty(); save();
+  });
+  strength.addEventListener("change", () => { markDirty(); save(); });
+  custom.addEventListener("change", () => { markDirty(); save(); });
+
+  card.append(el("label", { class: "field" }, el("span", { text: "影片 LoRA（settings.video.lora）" }), sel), custom,
+    el("label", { class: "field" }, el("span", { text: "strength（0–1.5）" }), strength));
+  card.append(el("div", { class: "row wrap" }, num("steps", "1", "60", "1"), num("cfg", "0", "30", "0.1"),
+    num("shiftVideo", "0.01", "100", "0.5"), num("shiftAudio", "0.01", "100", "0.5")));
+  card.append(el("p", { class: "hint", text: "預設＝Pika Flex 官方建議：strength 1.0、cfg 1.0、euler/simple、shift video 12／audio 3、steps 6（音訊在 6 步以下會崩）。加速 LoRA（Pika／LightX2V／larryvrh／DMAD）永不互相疊加，一支為限；底模維持 minimax_h3_ref2va_pruned_int8_convrot（不要換成已烘 turbo 的融合底模）。" }));
+  card.append(el("div", { class: "row wrap" }, el("button", { class: "btn btn-small btn-primary", type: "button", onclick: save }, "儲存影片設定"), status));
   return card;
 }
 
@@ -3186,6 +3472,7 @@ function renderSettings() {
   box.append(metaCard);
   box.append(gpuSettingsCard());
   box.append(comfySettingsCard());
+  box.append(videoGenSettingsCard());
 
   // M3a：模型服務設定（settings.llm）＋即時狀態；M3b：供應商（local/online/custom）＋線上 key
   const llmCard = el("div", { class: "card" }, el("h3", { text: "模型服務（settings.llm）" }));

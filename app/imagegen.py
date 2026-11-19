@@ -1519,6 +1519,631 @@ class BatchError(Exception):
     """批次生圖的前置錯誤（找不到鏡頭／已在跑）→ API 回 400/200 + 中文。"""
 
 
+# ── 7. 第二層：H3 Character Sheet Designer（engine=h3sheet，把立繪轉多角度設定表）──
+# 使用者要的順序：第一層 MOSS t2i 生單張立繪 → 第二層（這裡）把立繪 i2i 成多角度設定表。
+# 工作流：templates/h3_character_designer.ui.json（老臘肉 2026-11-16，前端 UI 格式，原檔不動）。
+# 節點 68 H3CharacterSheetDesignerReferenceV13 會「自己組提示詞」並輸出 prompt/width/height，
+# 所以我們只需要餵 character_image（＋ state_json 決定畫哪幾個視角），不要另外接文字提示詞。
+SHEET_TEMPLATE = paths.TEMPLATES_DIR / "h3_character_designer.ui.json"
+H3SHEET_FILES = {
+    # 本機只有 w4a8（12.5 GB，實測在 /object_info 清單裡）；工作流原本寫的 int8_convrot 版本沒下載，
+    # 照原檔名送會被 ComfyUI 判「Value not in list」（2026-11-19 實測）。有 int8 版時可在這裡換檔名。
+    "unet": "minimax_h3_image_pruned_w4a8.safetensors",
+    # 官方 int8_convrot 的 qwen3vl_32b 也不在本機 → 先照檔名試清單裡的 32B（NVFP4／AWQ／int8_uncensored），
+    # 每個候選逐次嘗試、第一次送件成功就記住（見 _h3sheet_failed_clips）；全部不行時回中文原因＋手動指定。
+    "clip": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+    "clipCandidates": (
+        "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "qwen3vl_32b_minimax_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+    ),
+    "clipType": "minimax",
+    "vae": "minimax_h3_image_vae_fp16.safetensors",
+}
+# 這一輪程序內「送件階段就被擋」的 encoder 檔名（例如這個人形權重去量化報錯）→ 換下一個候選。
+# 只在 Pod 內記憶，重啟就重試；不放進專案檔（那是使用者資料）。
+_h3sheet_failed_clips: set[str] = set()
+# 節點 63 SamplerCustomAdvanced 需要的五個輸入，全部由節點表推導（不寫死連線清單）
+H3SHEET_REQUIRED_CHAIN = {
+    68: ("state_json", "character_image"),
+    32: ("clip", "vae"),
+    29: ("unet_name",),
+    30: ("clip_name", "type"),
+    31: ("vae_name",),
+    63: ("noise", "guider", "sampler", "sigmas", "latent_image"),
+    67: ("model", "conditioning"),
+    42: ("samples",),
+    9: ("filename_prefix",),
+}
+H3SHEET_VIEWS = ("face_front", "face_left", "face_right", "face_3q_left", "body_front", "body_back")
+H3SHEET_VIEW_LABELS = {
+    "face_front": "正面頭像", "face_left": "左側臉", "face_right": "右側臉",
+    "face_3q_left": "左四分之三臉", "body_front": "正面全身", "body_back": "背面全身",
+}
+H3SHEET_DEFAULT_VIEWS = ("face_front", "face_left", "face_right", "body_front", "body_back")
+H3SHEET_STYLES = ("none", "anime", "photo", "realistic_painting", "semi_realistic_anime",
+                  "oil_painting", "watercolor", "gouache", "colored_pencil", "3d")
+H3SHEET_TIMEOUT = 2400            # 21GB UNET + 25GB text encoder 在 16GB VRAM 會大量 RAM offload，慢是預期
+H3SHEET_MP_OPTIONS = (4, 8, 16)   # 目標總像素（百萬）：預設 4MP（先求跑得完），最佳 16MP
+DEFAULT_FULL_KIND = "full"
+
+
+def build_h3sheet_state(view_list: list[str], body_height: int = 1120,
+                        megapixels: int = 0) -> str:
+    """組 state_json（節點 68 的 widgets 字串）。size.mode=auto 時節點自己算總寬，
+    body_height 是單一視角的角色高度；megapixels>0 可改成手動畫布（長邊推算）。"""
+    mp = _clamp_int(megapixels, 0, 32, 0)
+    if mp:
+        w, h = _sheet_manual_size(mp, len(view_list))
+        size = {"mode": "manual", "body_height": int(body_height),
+                "manual_width": w, "manual_height": h}
+    else:
+        size = {"mode": "auto", "body_height": int(body_height),
+                "manual_width": 3168, "manual_height": 1280}
+    state = {
+        "hand_state": "bare",
+        "clothing_mode": "garment",
+        "clothing_type": "reference",
+        "footwear_state": "shod",
+        "schema_version": 3,
+        "views": list(view_list),
+        "size": size,
+        "part_prompts": {},
+    }
+    return json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+
+
+def _sheet_manual_size(megapixels: int, n_views: int) -> tuple[int, int]:
+    """手動畫布：總像素 ≈ megapixels，每格寬 ≈ body_height*0.45，取 16 倍數。"""
+    px = int(megapixels * 1_000_000)
+    cell_w = int(1280 * 0.40)                     # 單格約 512 寬（1120 高的角色）
+    width = max(1024, cell_w * max(1, n_views))
+    height = max(512, px // width)
+    if height > 4096:                              # 太窄長：改由高度反推寬
+        height = 2048
+        width = max(1024, px // height)
+    return max(512, width // 16 * 16), max(512, height // 16 * 16)
+
+
+def normalize_h3sheet_views(views: Any) -> tuple[list[str], list[str]]:
+    """請求 → (合法 views, warnings)。不認識的一律丟掉；全空就用預設五視角。"""
+    warnings: list[str] = []
+    raw = [(_s(v)).lower() for v in (views or []) if _s(v)]
+    bad = [v for v in raw if v not in H3SHEET_VIEWS]
+    if bad:
+        warnings.append("不認得的視角已略過：" + "、".join(bad)
+                        + f"（合法值：{'、'.join(H3SHEET_VIEWS)}）")
+    picked: list[str] = []
+    for v in raw:
+        if v in H3SHEET_VIEWS and v not in picked:
+            picked.append(v)
+    if not picked:
+        picked = list(H3SHEET_DEFAULT_VIEWS)
+        if raw:
+            warnings.append(f"沒有可用的視角，改用預設：{'、'.join(picked)}")
+    # 依固定順序排（避免使用者勾選順序影響拼版）（拼版順序影響裁切對位）
+    picked.sort(key=lambda v: H3SHEET_VIEWS.index(v))
+    return picked, warnings
+
+
+def pick_character_full_ref(project: dict, ch: dict) -> dict | None:
+    """挑「要轉多角度的那張立繪」：refImages 裡 kind=full 的最新一張（檔案存在者優先）。
+
+    先挑檔案存在的（最新的優先）；全都找不到檔案就回 None，由呼叫端拒絕並講清楚原因。
+    """
+    slug = project.get("meta", {}).get("slug") or ""
+    base = storage.project_dir(slug)
+    cands = [r for r in (ch.get("refImages") or [])
+             if isinstance(r, dict) and _s(r.get("path")) and _s(r.get("kind") or DEFAULT_FULL_KIND) == DEFAULT_FULL_KIND]
+    def _stamp(r: dict) -> str:
+        return _s(r.get("addedAt")) or _s(r.get("path"))
+    cands.sort(key=_stamp, reverse=True)
+    for r in cands:
+        if (base / _s(r.get("path"))).is_file():
+            return r
+    return None
+
+
+def build_h3sheet_graph(ref_name: str, state_json: str, style: str, prefix: str,
+                        seed: int | None = None, clip_name: str | None = None) -> tuple[dict, dict]:
+    """在 UI 副本上寫參數 → 轉 API 節點圖（原檔不動），回 (graph, report)。
+
+    只留節點 9/27-33/42/48/56/63-69/75/76/78-79（MarkdownNote、Reroute 不轉）；
+    連線照工作流原本的 links，但目的地不在保留清單的就丟掉——所以換掉來源節點（69→上傳檔）
+    不會讓下游斷線。
+    """
+    ui = _load_h3sheet_ui()
+    nodes = {n["id"]: n for n in ui.get("nodes") or [] if isinstance(n, dict) and "id" in n}
+    keep = {27, 28, 29, 30, 31, 32, 33, 42, 48, 56, 63, 64, 65, 66, 67, 68, 69, 75, 76, 78, 79, 9}
+    missing = [i for i in keep if i not in nodes]
+    if missing:
+        raise ImageGenError(f"H3 設定表工作流缺少節點 {missing}（{SHEET_TEMPLATE.name} 被改過？）")
+
+    # 1) loader 三件套寫死成本機檔名（不讓前端 combo 回退）
+    nodes[29]["widgets_values"][0] = H3SHEET_FILES["unet"]
+    nodes[30]["widgets_values"][0] = clip_name or H3SHEET_FILES["clip"]
+    nodes[30]["widgets_values"][1] = H3SHEET_FILES["clipType"]
+    nodes[31]["widgets_values"][0] = H3SHEET_FILES["vae"]
+    # 2) 角色參考圖（LoadImage 69）＋ 設定表參數（節點 68）
+    nodes[69]["widgets_values"][0] = ref_name
+    wv = nodes[68]["widgets_values"]
+    wv[0] = state_json
+    wv[1] = True                                   # use_layout_image：輸出拼版圖（要存檔裁切）
+    wv[2] = style if style in H3SHEET_STYLES else "none"
+    # 3) 種子（節點 66）＋ 存檔前綴（節點 9）
+    nodes[66]["widgets_values"][0] = int(seed if seed is not None else random.randint(0, 2 ** 63 - 1))
+    nodes[9]["widgets_values"][0] = prefix
+
+    graph = _h3sheet_ui_to_api(ui, keep)
+    report = {
+        "unet": graph["29"]["inputs"].get("unet_name"),
+        "clip": graph["30"]["inputs"].get("clip_name"),
+        "clipType": graph["30"]["inputs"].get("type"),
+        "vae": graph["31"]["inputs"].get("vae_name"),
+        "style": graph["68"]["inputs"].get("style"),
+        "seed": graph["66"]["inputs"].get("noise_seed"),
+        "nodeCount": len(graph),
+    }
+    for nid, fields in H3SHEET_REQUIRED_CHAIN.items():
+        node = graph.get(str(nid))
+        if not node:
+            raise ImageGenError(f"H3 設定表工作流缺少節點 {nid}（class={nodes[nid].get('type')}）")
+        lack = [f for f in fields if f not in node["inputs"]]
+        if lack:
+            raise ImageGenError(f"H3 設定表節點 {nid}（{node.get('class_type')}）缺輸入 {lack}"
+                                f"：工作流的連線被改動過，請重新複製原檔到 templates/{SHEET_TEMPLATE.name}")
+    return graph, report
+
+
+def _load_h3sheet_ui() -> dict:
+    if not SHEET_TEMPLATE.is_file():
+        raise ImageGenError(f"缺少 H3 設定表工作流：templates/{SHEET_TEMPLATE.name}")
+    try:
+        raw = json.loads(SHEET_TEMPLATE.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        raise ImageGenError(f"H3 設定表工作流格式錯誤（{SHEET_TEMPLATE.name}）：{type(e).__name__}") from e
+    if not isinstance(raw, dict) or not isinstance(raw.get("nodes"), list):
+        raise ImageGenError(f"H3 設定表工作流不是前端格式（沒有 nodes 陣列）：{SHEET_TEMPLATE.name}")
+    return copy.deepcopy(raw)
+
+
+def _h3sheet_ui_to_api(ui: dict, keep: set[int]) -> dict:
+    """UI → API，但只看「工作流原本宣告的輸入插槽名」（節點 32 的 images 是動態展開的
+    COMFY_AUTOGROW_V3，插槽名是 images.image_N，不能靠節點類型推）。
+
+    Reroute（79）在 API 格式不存在 → 先把「來源節點輸出 → Reroute → 目的地」串接成直接連線：
+    67 BasicGuider 的 model 在 UI 是從 79 接過來的，照原樣送會被 ComfyUI 判「Node 'Reroute' not found」。
+    """
+    nodes = {n["id"]: n for n in ui.get("nodes") or [] if isinstance(n, dict) and "id" in n}
+    links = [l for l in (ui.get("links") or []) if isinstance(l, (list, tuple)) and len(l) >= 5]
+    reroutes = {nid for nid, n in nodes.items() if _s(n.get("type")) == "Reroute"}
+
+    def resolve(src: int, slot: int, depth: int = 0) -> list | None:
+        """把來源往上追到非 Reroute 的節點；回 [node_id_str, slot]。"""
+        if src in reroutes:
+            for l in links:                        # Reroute 只有一個輸入：找 to == src 的那條
+                if int(l[3]) == int(src) and depth < 10:
+                    return resolve(int(l[1]), int(l[2]), depth + 1)
+            return None
+        return [str(src), int(slot)]
+
+    incoming: dict[int, dict[int, list]] = {}
+    for l in links:
+        _lid, src, src_slot, dst, dst_slot = l[0], l[1], l[2], l[3], l[4]
+        if dst not in keep:
+            continue
+        resolved = resolve(int(src), int(src_slot))
+        if resolved:
+            incoming.setdefault(int(dst), {})[int(dst_slot)] = resolved
+    graph: dict[str, dict] = {}
+    for nid in sorted(keep):
+        node = nodes[nid]
+        ctype = _s(node.get("type"))
+        if ctype in ("MarkdownNote", "Reroute", "Note", "PrimitiveNode"):
+            continue            # 前端專用節點（Reroute 只是接線，API 版不存在）
+        vals = node.get("widgets_values")
+        inputs: dict[str, Any] = {}
+        if isinstance(vals, list):
+            # 只認「有名字的 widget」：H3 設定表節點的 widgets 是 state_json / use_layout_image / style
+            names = {"H3CharacterSheetDesignerReferenceV13": ("state_json", "use_layout_image", "style"),
+                     "UNETLoader": ("unet_name", "weight_dtype"),
+                     "CLIPLoader": ("clip_name", "type", "device"),
+                     "VAELoader": ("vae_name",),
+                     "MiniMaxH3ImageConditioning": ("prompt", "width", "height"),
+                     "ManualSigmas": ("sigmas",),
+                     "KSamplerSelect": ("sampler_name",),
+                     "RandomNoise": ("noise_seed", "control_after_generate"),
+                     "SaveImage": ("filename_prefix",),
+                     "LoadImage": ("image", "upload"),
+                     "Reroute": None,
+                     "ResizeImageMaskNode": None}.get(ctype)
+            if names is not None:
+                for i, nm in enumerate(names):
+                    if i < len(vals):
+                        inputs[nm] = vals[i]
+            elif ctype == "ResizeImageMaskNode":
+                # widgets_values 依 resize_type 而異（scale to multiple: [type, multiple, method]）
+                rt = vals[0] if vals else ""
+                inputs["resize_type"] = rt
+                if rt == "scale to multiple" and len(vals) > 1:
+                    inputs["resize_type.multiple"] = vals[1]
+                elif rt == "scale total pixels" and len(vals) > 1:
+                    inputs["resize_type.megapixels"] = vals[1]
+                if len(vals) > 2:
+                    inputs["scale_method"] = vals[2]
+        wired = incoming.get(nid, {})
+        for slot_idx, inp in enumerate(node.get("inputs") or []):
+            nm = _s(inp.get("name"))
+            if slot_idx in wired and nm:
+                inputs[nm] = wired[slot_idx]
+        graph[str(nid)] = {"class_type": ctype, "inputs": inputs}
+    return graph
+
+
+def _sheet_layout_guess(path: Path, n_views: int) -> tuple[str, int]:
+    """猜拼版方向與欄數（只看尺寸，不靠模型）：回 (方向 'h'|'v', 每列格數)。"""
+    w, h = _png_size(path)
+    if not w or not h:
+        return "h", n_views
+    # 目標：每格寬高比 ≈ 0.4–0.6（全身）或 0.6–0.9（只有頭像）
+    best = None
+    for cols in range(1, n_views + 1):
+        if n_views % cols:
+            continue
+        rows = n_views // cols
+        cw, chh = w / cols, h / rows
+        ratio = cw / chh
+        score = abs(ratio - 0.48)
+        if best is None or score < best[0]:
+            best = (score, cols, rows)
+    _score, cols, rows = best
+    return ("h" if cols >= rows else "v"), cols
+
+
+def crop_sheet(path: Path, n_views: int, out_dir: Path, stem: str,
+               direction: str | None = None, cols: int | None = None) -> list[Path]:
+    """把拼版大圖平均切成 n_views 張（依方向／每列格數）。任何失敗都回 []（不影響交付）。"""
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — 沒裝 PIL 就只交付整張
+        return []
+    try:
+        img = Image.open(path)
+        img.load()
+        w, h = img.size
+        if direction is None or cols is None:
+            direction, cols = _sheet_layout_guess(path, n_views)
+        rows = max(1, n_views // cols)
+        if cols * rows != n_views:
+            return []
+        cw, chh = w // cols, h // rows
+        if cw < 64 or chh < 64:
+            return []
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved: list[Path] = []
+        for idx in range(n_views):
+            r, c = divmod(idx, cols)
+            box = (c * cw, r * chh, (c + 1) * cw, (r + 1) * chh)
+            target = out_dir / f"{stem}_{idx + 1:02d}.png"
+            img.crop(box).save(target)
+            saved.append(target)
+        return saved
+    except Exception:  # noqa: BLE001 — 裁切是加分項，失敗不要擋交付
+        return []
+
+
+def _h3sheet_missing_files(base_url: str | None = None) -> list[str]:
+    """向 /object_info 核對三件套是否存在（回缺的檔名清單，空＝都在）。讀不到清單就回 [] 交給送件去判。"""
+    try:
+        import httpx
+        with httpx.Client(timeout=30.0) as c:
+            info = c.get(f"{comfy._base(base_url)}/object_info").json()
+    except Exception:  # noqa: BLE001
+        return []
+    specs = (("UNETLoader", "unet_name", H3SHEET_FILES["unet"]),
+             ("CLIPLoader", "clip_name", H3SHEET_FILES["clip"]),
+             ("VAELoader", "vae_name", H3SHEET_FILES["vae"]))
+    missing: list[str] = []
+    for cls, field, want in specs:
+        opts = (((info.get(cls) or {}).get("input") or {}).get("required") or {}).get(field) or []
+        choices = opts[0] if opts and isinstance(opts[0], list) else []
+        if want not in choices:
+            missing.append(f"{field}={want}")
+    return missing
+
+
+def generate_character_sheet_angles(project: dict, cid: str, opts: dict | None = None) -> dict:
+    """第二層：把角色卡上「最新的 kind=full 立繪」送進 H3 Character Sheet Designer，
+    生一張多角度設定表（拼版大圖），可選裁成多張。寫回 refImages（原圖保留）。
+
+    opts：views[]、style、crop（預設 True）、bodyHeight、megapixels、seed、timeout、_gpuForce
+    GPU：預設自己切換（停本機 LLM）；背景 job 外層已切換時傳 _gpuForce=True。
+    """
+    opts = opts or {}
+    if opts.get("_gpuForce"):
+        return _generate_character_sheet_angles_impl(project, cid, opts)
+    slug = project.get("meta", {}).get("slug") or ""
+    with gpu_for_comfy(20000, slug, "H3 多角度設定表", project=project) as box:
+        res = _generate_character_sheet_angles_impl(project, cid, opts)
+    res["gpu"] = gpu_public(box["switch"], box["restore"])
+    return res
+
+
+def _generate_character_sheet_angles_impl(project: dict, cid: str, opts: dict) -> dict:
+    ch = find_character(project, cid)
+    if ch is None:
+        raise ImageGenError(f"找不到人物 {cid}")
+    ref = pick_character_full_ref(project, ch)
+    if ref is None:
+        raise ImageGenError(
+            f"{cid}（{ch.get('name') or cid}）沒有可用的全身立繪（refImages 裡找不到 kind=full 且檔案存在的圖）："
+            "請先在角色卡按「生成立繪」（MOSS t2i）產生第一層立繪，再用多角度設定表")
+    slug = project.get("meta", {}).get("slug") or ""
+    base = storage.project_dir(slug)
+    src_path = base / _s(ref["path"])
+    warnings: list[str] = []
+    views, vw = normalize_h3sheet_views(opts.get("views"))
+    warnings.extend(vw)
+    style = _s(opts.get("style")) or "none"
+    if style not in H3SHEET_STYLES:
+        warnings.append(f"不認得的風格 {style}，改用 none")
+        style = "none"
+    body_height = _clamp_int(opts.get("bodyHeight"), 480, 2048, 1120)
+    megapixels = _clamp_int(opts.get("megapixels"), 0, 32, 0)
+    seed = opts.get("seed")
+    try:
+        seed = int(seed) if seed not in (None, "") else random.randint(0, 2 ** 63 - 1)
+    except (TypeError, ValueError):
+        seed = random.randint(0, 2 ** 63 - 1)
+    crop = bool(opts.get("crop", True))
+    timeout = _clamp_int(opts.get("timeout"), 120, 7200, H3SHEET_TIMEOUT)
+
+    base_url = _comfy_base(project)
+    ok, msg, info = comfy.comfy_available(base_url)
+    if not ok:
+        raise ImageGenError(msg)
+    if info.get("vramTotalMB") and info["vramTotalMB"] < 30000:
+        warnings.append(f"顯示卡 VRAM {info['vramTotalMB']} MB 小於模型總量（46 GB）：會大量 RAM offload，"
+                        "這一張可能要 10–20 分鐘以上；想快一點可只勾 1–2 個視角")
+
+    try:
+        ref_name = comfy.upload_image(src_path, base_url)
+    except comfy.ComfyError as e:
+        raise ImageGenError(str(e)) from e
+    # 模型檔先驗（送件被 combo 擋下來時 ComfyUI 只會回「Value not in list」，看不出是哪個檔）
+    missing = _h3sheet_missing_files(base_url)
+    if missing:
+        raise ImageGenError("H3 設定表需要的模型檔不在 ComfyUI 清單裡：" + "、".join(missing)
+                            + "（請確認 models/diffusion_models、text_encoders、vae 三個資料夾，"
+                            "或改 app/imagegen.py 的 H3SHEET_FILES）")
+    state_json = build_h3sheet_state(views, body_height, megapixels)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    prefix = f"svs_h3sheet_{cid}_{stamp}"
+
+    def _available(names: list[str]) -> list[str]:
+        """只留 ComfyUI 清單裡真的有的檔名（順序照 candidates）。"""
+        try:
+            import httpx
+            with httpx.Client(timeout=30.0) as c:
+                info = c.get(f"{comfy._base(base_url)}/object_info/CLIPLoader").json()
+            choices = ((((info.get("CLIPLoader") or {}).get("input") or {}).get("required") or {})
+                       .get("clip_name") or [[]])[0]
+        except Exception:  # noqa: BLE001
+            return names[:1]
+        return [n for n in names if n in choices]
+
+    clip_order = _available([H3SHEET_FILES["clip"], *H3SHEET_FILES["clipCandidates"]])
+    clip_order += [n for n in H3SHEET_FILES["clipCandidates"] if n not in clip_order and n not in _h3sheet_failed_clips]
+    clip_order = [n for n in clip_order if n not in _h3sheet_failed_clips]
+    if not clip_order:
+        raise ImageGenError("H3 設定表的 text encoder 全部試過都失敗："
+                            + "、".join(sorted(_h3sheet_failed_clips))
+                            + "（多半是這顆權重與 w4a8 UNET 不相容）。請換一顆 qwen3vl_32b 再試，"
+                            "或把官方 qwen3vl_32b_minimax_h3_int8_convrot 下載到 models/text_encoders")
+
+    t0 = time.time()
+    attempts: list[dict] = []
+    pid = ""
+    record = None
+    report: dict = {}
+    last_err = ""
+    for clip_name in clip_order:
+        graph, report = build_h3sheet_graph(ref_name, state_json, style, prefix, seed, clip_name)
+        try:
+            pid = comfy.submit(graph, base_url)
+        except comfy.ComfyError as e:
+            # 送件就被拒：可能是這個 encoder 不在清單（換下一個），也可能是圖／節點問題（直接報）
+            last_err = str(e)
+            if "clip_name" in last_err or "Value not in list" in last_err:
+                _h3sheet_failed_clips.add(clip_name)
+                attempts.append({"clip": clip_name, "error": last_err[:200], "stage": "submit"})
+                warnings.append(f"encoder {clip_name} 送件被拒，換下一顆")
+                continue
+            raise ImageGenError(f"H3 設定表送件失敗：{e}｜loader={report.get('unet')}／{report.get('clip')}") from e
+        try:
+            record = comfy.wait(pid, timeout=timeout, base_url=base_url)
+            break
+        except comfy.ComfyError as e:
+            last_err = str(e)
+            # 「dequantize / dtype / backend can handle」＝這顆 encoder 跟 UNET 對不上 → 換下一個候選
+            txt = last_err.lower()
+            if any(k in txt for k in ("dequantize", "not in {", "no backend can handle", "cannot handle")):
+                _h3sheet_failed_clips.add(clip_name)
+                attempts.append({"clip": clip_name, "error": last_err[:300], "stage": "run"})
+                warnings.append(f"encoder {clip_name} 載入後不相容（{last_err[:90]}…），換下一顆重試")
+                continue
+            if _is_oom(e):
+                raise ImageGenError(
+                    f"H3 設定表爆記憶體（prompt_id={pid}）：{e}\n"
+                    "建議降級：①只勾 1–2 個視角 ②bodyHeight 調到 832 或 768 ③megapixels=4"
+                    "（畫布越小越省）後重試") from e
+            raise ImageGenError(f"H3 設定表失敗：{e}｜prompt_id={pid}｜views={','.join(views)}"
+                                f"｜encoder={clip_name}") from e
+    if record is None:
+        raise ImageGenError("H3 設定表的 text encoder 全部不相容（都試過）："
+                            + "；".join(f"{a['clip']}：{a['error'][:160]}" for a in attempts)
+                            + "。最穩的解法：把官方 qwen3vl_32b_minimax_h3_int8_convrot.safetensors "
+                            "下載到 models/text_encoders 後重試")
+
+    dest_dir = base / "media" / "characters"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_name = f"{cid}_sheetangles_{stamp}.png"
+    try:
+        saved = comfy.collect_images(record, dest_dir, filename=target_name, base_url=base_url)
+    except comfy.ComfyError as e:
+        raise ImageGenError(str(e)) from e
+    if not saved:
+        raise ImageGenError("H3 設定表完成了，但沒有任何圖檔落地")
+    elapsed = round(time.time() - t0, 1)
+    main_path = saved[0]
+    width, height = _png_size(main_path)
+    rel_path = f"media/characters/{main_path.name}"
+
+    # 裁切（加分項）：判斷是不是「一張拼版」→ 依尺寸猜方向與欄數再平均切
+    crops: list[dict] = []
+    if crop and len(views) > 1:
+        if width and height and max(width, height) / max(1, min(width, height)) < 1.45:
+            direction, cols = "v", 1
+        else:
+            direction, cols = _sheet_layout_guess(main_path, len(views))
+        outs = crop_sheet(main_path, len(views), dest_dir, main_path.stem, direction, cols)
+        if len(outs) == len(views):
+            for i, p in enumerate(outs):
+                crops.append({"path": f"media/characters/{p.name}", "view": views[i],
+                              "label": H3SHEET_VIEW_LABELS.get(views[i], views[i])})
+        else:
+            warnings.append("拼版裁切沒成功（版面可能是 2 欄或不平均）：只交付整張設定表，"
+                            "要單張請自行在圖片檢視器裁切")
+
+    refs = ch.get("refImages") if isinstance(ch.get("refImages"), list) else []
+    ch["refImages"] = refs
+    now = storage.now_iso()
+    views_note = ",".join(views)
+    detail = ("｜" + "、".join(c["label"] for c in crops)) if crops else ""
+    refs.append({"path": rel_path, "kind": "full", "locked": False, "source": "h3sheet",
+                 "note": f"h3sheet:{views_note}{detail}", "addedAt": now})
+    for c in crops:
+        refs.append({"path": c["path"], "kind": "full", "locked": False, "source": "h3sheet",
+                     "note": f"h3sheet:{views_note}｜{c['label']}（由整張設定表裁切）", "addedAt": now})
+    ch["updatedAt"] = now
+
+    logs = project.setdefault("pipeline", {}).setdefault("logs", [])
+    logs.append({
+        "at": now, "step": "imagegen.sheet", "shotId": "", "characterId": cid,
+        "msg": f"{ch.get('name') or cid} 多角度設定表完成：{rel_path}｜{elapsed} 秒｜views={views_note}"
+               f"｜{width}×{height}｜crop={len(crops)} 張｜style={style}｜bodyHeight={body_height}",
+        "pid": pid, "model": "H3 Character Sheet Designer V13", "elapsed": elapsed, "path": rel_path,
+        "seed": seed, "engine": "h3sheet", "views": views, "crops": [c["path"] for c in crops],
+    })
+    if len(logs) > 200:
+        del logs[:-200]
+    return {"ok": True, "characterId": cid, "name": ch.get("name"), "path": rel_path,
+            "url": f"/files/{slug}/{rel_path}", "pid": pid, "elapsed": elapsed,
+            "width": width, "height": height, "views": views, "style": style,
+            "bodyHeight": body_height, "megapixels": megapixels, "seed": seed,
+            "crops": crops, "sourceRef": _s(ref["path"]), "warnings": warnings,
+            "loaders": report}
+
+
+# ── 7b. 多角度設定表的背景 job（H3 image 很慢；API 先回 jobId 讓前端 poll）──
+SHEET_JOBS: dict[str, dict] = {}
+_SHEET_LOCK = threading.Lock()
+_SHEET_MAX_KEEP = 20
+
+
+def _sheet_public(job: dict) -> dict:
+    return {k: v for k, v in job.items() if k not in ("_thread",)}
+
+
+def start_sheet_job(slug: str, cid: str, opts: dict | None = None) -> dict:
+    """建立背景 job 並回狀態（jobId 給前端 poll）。同專案同時只允許一個在跑。"""
+    opts = opts or {}
+    with _SHEET_LOCK:
+        for j in SHEET_JOBS.values():
+            if j.get("slug") == slug and j.get("status") in ("queued", "running"):
+                raise BatchError(f"這個專案已經有一張多角度設定表在跑（{j.get('jobId')}，"
+                                 f"狀態 {j.get('status')}），等它跑完再送（H3 image 一次只能跑一張）")
+        job_id = f"h3s-{uuid.uuid4().hex[:10]}"
+        views, _w = normalize_h3sheet_views(opts.get("views"))
+        job = {
+            "jobId": job_id, "slug": slug, "characterId": cid, "status": "queued",
+            "phase": "排隊中…", "createdAt": storage.now_iso(), "startedAt": "", "finishedAt": "",
+            "views": views, "style": _s(opts.get("style")) or "none",
+            "crop": bool(opts.get("crop", True)),
+            "elapsed": 0.0, "path": "", "url": "", "pid": "", "width": None, "height": None,
+            "crops": [], "warnings": [], "error": "", "gpu": {},
+        }
+        SHEET_JOBS[job_id] = job
+        if len(SHEET_JOBS) > _SHEET_MAX_KEEP:
+            for k in sorted(SHEET_JOBS, key=lambda x: SHEET_JOBS[x]["createdAt"]):
+                if k != job_id and SHEET_JOBS[k].get("status") in ("done", "failed"):
+                    SHEET_JOBS.pop(k, None)
+                    break
+    th = threading.Thread(target=_run_sheet_job, args=(job_id, dict(opts)), name=f"h3sheet-{job_id}", daemon=True)
+    job["_thread"] = th
+    th.start()
+    return _sheet_public(job)
+
+
+def get_sheet_job(job_id: str) -> dict | None:
+    with _SHEET_LOCK:
+        job = SHEET_JOBS.get(job_id)
+        return copy.deepcopy(_sheet_public(job)) if job else None
+
+
+def _run_sheet_job(job_id: str, opts: dict) -> None:
+    t_all = time.time()
+    with _SHEET_LOCK:
+        job = SHEET_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        job["startedAt"] = storage.now_iso()
+        job["phase"] = "檢查 GPU（必要時暫停本機 LLM）…"
+        slug, cid = job["slug"], job["characterId"]
+    try:
+        with gpu_for_comfy(20000, slug, "H3 多角度設定表") as box:
+            with _SHEET_LOCK:
+                job["phase"] = "H3 image 生成中（很慢：16GB VRAM 會大量 RAM offload，可能 10–25 分鐘）…"
+            data = storage.load_project(slug)
+            res = _generate_character_sheet_angles_impl(data, cid, {**opts, "_gpuForce": True})
+            try:
+                storage.save_project(slug, data)
+            except Exception as e:  # StorageError 在 imagegen 沒 import；一律當寫回失敗處理
+                with _SHEET_LOCK:
+                    job.update({"status": "failed", "finishedAt": storage.now_iso(),
+                                "error": f"圖已生成（{res['path']}）但寫回 project.json 失敗：{e}"})
+                return
+            # 收尾排在「LLM 已啟回」之後，前端才不會看到完成但還原狀態還沒填
+            g = gpu_public(box["switch"], box["restore"])
+        with _SHEET_LOCK:
+            job.update({
+                "status": "done", "finishedAt": storage.now_iso(), "phase": "已結束",
+                "path": res["path"], "url": res["url"], "pid": res["pid"],
+                "width": res.get("width"), "height": res.get("height"),
+                "crops": res.get("crops") or [], "warnings": res.get("warnings") or [],
+                "elapsed": res.get("elapsed"), "gpu": g,
+            })
+    except GpuBusyError as e:
+        with _SHEET_LOCK:
+            job.update({"status": "failed", "finishedAt": storage.now_iso(),
+                        "phase": "沒有送件（本機 LLM 正在運算）", "error": str(e),
+                        "gpu": {"busy": True, "error": str(e)},
+                        "elapsed": round(time.time() - t_all, 1)})
+    except ImageGenError as e:
+        with _SHEET_LOCK:
+            job.update({"status": "failed", "finishedAt": storage.now_iso(), "phase": "失敗",
+                        "error": str(e), "elapsed": round(time.time() - t_all, 1)})
+    except Exception as e:  # noqa: BLE001 — 背景 thread 的例外一定要收成 job 狀態
+        detail = f"{type(e).__name__}: {e}"
+        if isinstance(e, NameError):
+            detail += "（這是程式內部錯誤：背景 job 用到未定義的名稱，請回報）"
+        with _SHEET_LOCK:
+            job.update({"status": "failed", "finishedAt": storage.now_iso(), "phase": "失敗",
+                        "error": f"未預期錯誤：{detail}",
+                        "elapsed": round(time.time() - t_all, 1)})
+
+
 def _batch_public(job: dict) -> dict:
     """給前端看的狀態（不含內部 thread 指標）。"""
     return {k: v for k, v in job.items() if k not in ("_thread",)}

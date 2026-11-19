@@ -90,6 +90,37 @@ def project_file(slug: str) -> Path:
     return project_dir(slug) / "project.json"
 
 
+# ── M9：影片生成參數（settings.video）───────────────────────────
+# 預設值＝Pika Flex 官方建議（steps 6／cfg 1.0／shift 12-3／euler+simple／strength 1.0）。
+# 不改 docs/data-model.md，舊專案由 fill_project_defaults 讀取時補上（不寫回檔）。
+VIDEO_LORA_PIKA_BF16 = "pika_h3_flex_ref2va_comfy_bf16.safetensors"
+
+
+def video_settings_defaults() -> dict:
+    return {
+        "lora": {"name": VIDEO_LORA_PIKA_BF16, "strength": 1.0, "active": True},
+        "steps": 6, "cfg": 1.0, "shiftVideo": 12.0, "shiftAudio": 3.0,
+        "sampler": "euler", "scheduler": "simple",
+    }
+
+
+def video_settings(project: dict) -> dict:
+    """專案 settings.video（缺的欄位補預設）。永不拋例外。"""
+    st = (project or {}).get("settings")
+    got = (st or {}).get("video") if isinstance(st, dict) else None
+    out = video_settings_defaults()
+    if isinstance(got, dict):
+        lora = got.get("lora")
+        if isinstance(lora, dict):
+            out["lora"] = {**out["lora"], **{k: v for k, v in lora.items() if k in ("name", "strength", "active")}}
+        elif isinstance(lora, str):
+            out["lora"] = {**out["lora"], "name": lora}
+        for k in ("steps", "cfg", "shiftVideo", "shiftAudio", "sampler", "scheduler"):
+            if got.get(k) not in (None, ""):
+                out[k] = got[k]
+    return out
+
+
 # ── 空白骨架 ────────────────────────────────────────────────────
 def blank_project(slug: str, name: str, aspect_ratio: str = "9:16") -> dict:
     """依 docs/data-model.md 產生完整空白 project.json（所有頂層 key 都在，空陣列而非缺 key）。"""
@@ -125,6 +156,7 @@ def blank_project(slug: str, name: str, aspect_ratio: str = "9:16") -> dict:
             },
             "comfy": {"baseUrl": "http://127.0.0.1:8000"},
             "tts": {"engine": "fish_s2", "baseUrl": ""},
+            "video": video_settings_defaults(),
         },
         "pipeline": {"stage": "story", "logs": []},
     }
@@ -157,6 +189,22 @@ def fill_project_defaults(data: dict) -> dict:
     """補 v0.2 欄位預設（就地修改並回傳同一物件）。永不拋例外、不寫檔。"""
     if not isinstance(data, dict):
         return data
+    st = data.get("settings")
+    if isinstance(st, dict):
+        base_v = video_settings_defaults()
+        cur = st.get("video")
+        if not isinstance(cur, dict):
+            st["video"] = base_v
+        else:
+            merged = dict(base_v)
+            merged.update({k: v for k, v in cur.items() if v is not None})
+            if isinstance(merged.get("lora"), str):
+                merged["lora"] = {**base_v["lora"], "name": merged["lora"]}
+            elif not isinstance(merged.get("lora"), dict):
+                merged["lora"] = base_v["lora"]
+            else:
+                merged["lora"] = {**base_v["lora"], **merged["lora"]}
+            st["video"] = merged
     data.setdefault("voiceMap", {})
     if not isinstance(data.get("voiceMap"), dict):
         data["voiceMap"] = {}

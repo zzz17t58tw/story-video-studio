@@ -554,6 +554,17 @@ class ImageEngineBody(BaseModel):
     engine: str
 
 
+class SheetBody(BaseModel):
+    """第二層：H3 多角度設定表。views 不給＝預設五視角；crop 預設 True（拼版可切就切）。"""
+    views: Optional[list[str]] = None
+    style: Optional[str] = None
+    crop: Optional[bool] = True
+    bodyHeight: Optional[int] = None
+    megapixels: Optional[int] = None
+    seed: Optional[int] = None
+    timeout: Optional[int] = None
+
+
 @app.get("/api/comfy/status")
 def api_comfy_status(slug: Optional[str] = Query(None), baseUrl: Optional[str] = Query(None)):
     """ComfyUI 狀態：{ok, baseUrl, version, device, vramFreeMB, message}。連不上也是 200。"""
@@ -824,6 +835,46 @@ def api_generate_images_status(slug: str, job_id: str):
     return {"ok": True, "slug": slug, "job": job}
 
 
+# ── 第二層：H3 多角度設定表（角色立繪 → 多視角設定表，i2i）────────────
+@app.post("/api/projects/{slug}/characters/{cid}/generate/sheet")
+def api_generate_character_sheet_angles(slug: str, cid: str, body: Optional[SheetBody] = None):
+    """第二層：把角色卡最新的 kind=full 立繪送進 H3 Character Sheet Designer。
+
+    H3 image 很慢（21GB UNET + 25GB text encoder）→ 一律走背景 job，回 jobId + pollUrl，
+    前端每 3 秒 poll；完成後圖寫回 characters[].refImages（原圖保留）。
+    """
+    body = body or SheetBody()
+    data, err = _load_for_m3d(slug)
+    if err:
+        return err
+    ch = imagegen.find_character(data, cid)
+    if ch is None:
+        return _fail(404, f"找不到人物 {cid}")
+    ref = imagegen.pick_character_full_ref(data, ch)
+    if ref is None:
+        return JSONResponse(status_code=200, content={
+            "ok": False, "slug": slug, "characterId": cid,
+            "error": f"{cid}（{ch.get('name') or cid}）沒有可用的全身立繪（kind=full）："
+                     "請先在角色卡按「生成立繪」產生第一層立繪（MOSS t2i），再生成多角度設定表",
+        })
+    opts = body.model_dump(exclude_none=True)
+    try:
+        job = imagegen.start_sheet_job(slug, cid, opts)
+    except imagegen.BatchError as e:
+        return JSONResponse(status_code=200, content={"ok": False, "slug": slug, "error": str(e)})
+    return {"ok": True, "slug": slug, "characterId": cid, "job": job, "jobId": job["jobId"],
+            "sourceRef": ref["path"],
+            "pollUrl": f"/api/projects/{slug}/characters/{cid}/generate/sheet/{job['jobId']}"}
+
+
+@app.get("/api/projects/{slug}/characters/{cid}/generate/sheet/{job_id}")
+def api_generate_character_sheet_angles_status(slug: str, cid: str, job_id: str):
+    job = imagegen.get_sheet_job(job_id)
+    if not job or job.get("slug") != slug:
+        return _fail(404, f"找不到多角度任務 {job_id}（伺服器重啟過的話進度會消失，圖仍在 media/characters/）")
+    return {"ok": True, "slug": slug, "characterId": cid, "job": job}
+
+
 @app.post("/api/projects/{slug}/validate")
 def api_validate(slug: str, body: Optional[ValidateBody] = None):
     data, err = _load_for_m3d(slug)
@@ -934,6 +985,62 @@ def api_deploy_cancel(slug: str, job_id: str):
     return {"ok": True, "slug": slug, "job": job}
 
 
+class VideoSettingsBody(BaseModel):
+    """settings.video（M9）：lora{name,strength,active} ＋ steps/cfg/shiftVideo/shiftAudio/sampler/scheduler。"""
+    lora: Optional[dict] = None
+    steps: Optional[int] = None
+    cfg: Optional[float] = None
+    shiftVideo: Optional[float] = None
+    shiftAudio: Optional[float] = None
+    sampler: Optional[str] = None
+    scheduler: Optional[str] = None
+
+
+@app.get("/api/projects/{slug}/video/settings")
+def api_get_video_settings(slug: str):
+    """影片生成參數（settings.video，缺的補預設）＋可選 LoRA 清單。"""
+    try:
+        data = storage.load_project(slug)
+    except StorageError as e:
+        return _fail(404, str(e))
+    return {"ok": True, "slug": slug, "settings": storage.video_settings(data),
+            "defaults": storage.video_settings_defaults(),
+            "loraChoices": [{"name": n, "label": lb} for n, lb in h3gen.LORA_CHOICES]}
+
+
+@app.put("/api/projects/{slug}/video/settings")
+def api_put_video_settings(slug: str, body: Optional[VideoSettingsBody] = None):
+    """存 settings.video（只寫有給的欄位；lora.name 空字串＝不掛）。"""
+    try:
+        data = storage.load_project(slug)
+    except StorageError as e:
+        return _fail(404, str(e))
+    body = body or VideoSettingsBody()
+    cur = storage.video_settings(data)
+    got = body.model_dump(exclude_none=True)
+    for k in ("steps", "cfg", "shiftVideo", "shiftAudio", "sampler", "scheduler"):
+        if k in got:
+            cur[k] = got[k]
+    if "lora" in got:
+        lora = got["lora"] if isinstance(got["lora"], dict) else {}
+        name = str(lora.get("name") or "").strip()
+        if not name:
+            cur["lora"] = {"name": "", "strength": 1.0, "active": False}
+        else:
+            try:
+                strength = float(lora.get("strength", cur["lora"].get("strength", 1.0)))
+            except (TypeError, ValueError):
+                strength = 1.0
+            cur["lora"] = {"name": name, "strength": max(0.0, min(1.5, strength)),
+                           "active": bool(lora.get("active", True))}
+    data.setdefault("settings", {})["video"] = cur
+    try:
+        storage.save_project(slug, data)
+    except StorageError as e:
+        return _fail(400, str(e))
+    return {"ok": True, "slug": slug, "settings": cur}
+
+
 # ── M5a：單鏡生影片（導演台 r2v）──────────────────────────────────
 class GenerateVideoBody(BaseModel):
     """單鏡生影片參數。全部可留白：預設 480x864（9:16 低清）、39 幀（1.625 秒）、steps=4。
@@ -948,6 +1055,13 @@ class GenerateVideoBody(BaseModel):
     seed: Optional[int] = None
     timeout: Optional[int] = None
     useFirstFrame: bool = True
+    # M9：影片 LoRA 與採樣參數（留空＝用 settings.video）。lora 給 {"name","strength","active"}，
+    # name 空字串＝這一鏡不掛；不傳 lora 欄位＝照專案設定。
+    lora: Optional[dict] = None
+    shiftVideo: Optional[float] = None
+    shiftAudio: Optional[float] = None
+    sampler: Optional[str] = None
+    scheduler: Optional[str] = None
 
 
 @app.post("/api/projects/{slug}/shots/{shot_id}/generate/video")
@@ -1004,6 +1118,11 @@ class VideoPresetBody(BaseModel):
     cfg: Optional[float] = None
     seed: Optional[int] = None
     timeout: Optional[int] = None
+    lora: Optional[dict] = None
+    shiftVideo: Optional[float] = None
+    shiftAudio: Optional[float] = None
+    sampler: Optional[str] = None
+    scheduler: Optional[str] = None
 
 
 class GenerateVideosBody(BaseModel):

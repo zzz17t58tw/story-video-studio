@@ -35,10 +35,10 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 
 ### 生圖（可在設定頁切換引擎）
 
-| 引擎 | 模型檔 | 工作流來源 |
-|---|---|---|
-| **MOSS Image** | `diffusion_models/moss_image_sft_int8_convrot`<br>`text_encoders/qwen3.5_9b_int8_convrot`<br>`vae/flux2-vae` | 社群工作流 `moss-image-sft`（作者：老臘肉 / amao2001）。本專案另存一份**修正過的 int8 版**：把 CLIPLoader 從缺檔的 `qwen3.5_9b_bf16` 改為官方同系列 `int8_convrot`，避免 ComfyUI 前端靜默回退成 uncensored 權重。參數：768×1344、30 步、CFG 3.0、euler / sgm_uniform、skip-layer guidance 22 |
-| **Qwen Image 2.1** | `qwen_image_2.1_int8_convrot`<br>`qwen3vl_8b_int8_convrot`<br>`qwen_image_2.1_vae_bf16` | ComfyUI 範例工作流 `01_Qwen21_文生圖` / `02_Qwen21_圖片編輯`（API 格式）。本專案把參考圖擴充到 4 張（`images.image_1..4`），並實測確認可送件 |
+| 引擎 | 模型檔 | 工作流來源 | 模型／工作流出處 |
+|---|---|---|---|
+| **MOSS Image** | `diffusion_models/moss_image_sft_int8_convrot`<br>`text_encoders/qwen3.5_9b_int8_convrot`<br>`vae/flux2-vae` | 社群工作流 `moss-image-sft`（作者：老臘肉 / [amao2001](https://github.com/amao2001)）。本專案另存一份**修正過的 int8 版**：把 CLIPLoader 從缺檔的 `qwen3.5_9b_bf16` 改為官方同系列 `int8_convrot`，避免 ComfyUI 前端靜默回退成 uncensored 權重。參數：768×1344、30 步、CFG 3.0、euler / sgm_uniform、skip-layer guidance 22 | 模型：[OpenMOSS/MOSS-Image](https://github.com/OpenMOSS/MOSS-Image)（Apache-2.0，含官方 ComfyUI 工作流） |
+| **Qwen Image 2.1** | `qwen_image_2.1_int8_convrot`<br>`qwen3vl_8b_int8_convrot`<br>`qwen_image_2.1_vae_bf16` | ComfyUI 範例工作流 `01_Qwen21_文生圖` / `02_Qwen21_圖片編輯`（API 格式）。本專案把參考圖擴充到 4 張（`images.image_1..4`），並實測確認可送件 | 模型：[QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) |
 
 一致性策略差異：
 - **Qwen 2.1** 走參考圖槽位（`<image1>`／`<Picture N>`），可鎖臉。
@@ -53,7 +53,9 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 | Video VAE | `minimax_h3_video_vae_fp16.safetensors` |
 | Audio VAE | `minimax_h3_audio_vae_fp32.safetensors` |
 
-工作流：**AIMixer MiniMaxH3 導演台**（以 `r2v` 參考主體生視頻為主，另有 `i2v` / `fl2v` / `v2v` / `rv2v`）。
+模型出處：[MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
+
+工作流：**[AIMixer](https://github.com/AIMixer) MiniMaxH3 導演台**（節點：[AIMixer/ComfyUI_MiniMaxH3_Director](https://github.com/AIMixer/ComfyUI_MiniMaxH3_Director)，Apache-2.0）。以 `r2v` 參考主體生視頻為主，另有 `i2v` / `fl2v` / `v2v` / `rv2v`。
 本專案的 `app/h3gen.py` 直接組導演台的 `timeline_data`（r2v 單段）送 `POST /prompt`，輸出為 **h264 + aac（32 kHz）含音軌**。
 
 實測時間成本（RTX 5070 Ti，僅供參考，會隨步數與解析度劇烈變動）：
@@ -83,9 +85,9 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 | [Carasibana/ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine) | 臉部精修（選用） |
 
 ### 工作流來源（非 git，社群分享）
-- **老臘肉（amao2001）**：MOSS Image 工作流 `moss-image-sft`（本專案使用其修正版）
-- **AIMixer**：導演台附帶的 `minimax_h3_director_*` 系列工作流
-- **T8**：H3 / Qwen 加速與擴充工作流
+- **老臘肉（[amao2001](https://github.com/amao2001)）**：MOSS Image 工作流 `moss-image-sft`（本專案使用其修正版）；官方對應工作流見 [OpenMOSS/MOSS-Image `comfyui/`](https://github.com/OpenMOSS/MOSS-Image/tree/main/comfyui)
+- **[AIMixer](https://github.com/AIMixer)**：導演台附帶的 `minimax_h3_director_*` 系列工作流
+- **[T8mars](https://github.com/T8mars)**：H3 / Qwen 加速與擴充工作流
 
 ### 研究階段僅「參考概念與資料結構」、**未搬用任何程式碼**
 
@@ -131,7 +133,45 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 
 ---
 
-## 四、免責聲明
+## 四、開發與執行所用的 AI 代理、技能與依賴來源
+
+本專案是「人 + AI 代理」協作開發，執行時也會呼叫 LLM 與外部服務。來源全部列出如下。
+
+### 4.1 開發用的 AI 代理
+| 項目 | 來源 | 授權 |
+|---|---|---|
+| **Hermes Agent**（開發代理框架：需求拆解、派子代理實作、實測驗收、發佈） | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | MIT |
+
+### 4.2 專案使用的技能（skill）
+| 技能 | 位置 | 內容 |
+|---|---|---|
+| `story-video-studio` | Hermes profile `skills/creative/story-video-studio/`（**不隨本 repo 散布**） | 本專案架構、派工紀律、建置與發佈流程、踩坑紀錄（`--noconfirm` 會清空 `dist`、H3 音訊 32 kHz、導演台 widgets 索引位移、CLIPLoader 靜默回退…） |
+| `comfyui-*` 系列 | 同上 | ComfyUI 送件契約、模型家族查詢、加速堆疊等既有知識 |
+
+> 技能檔是開發過程的知識沉澱，含本機路徑與個人環境設定，因此不進公開 repo；需要的內容已整理進 `docs/`（`contracts.md`、`data-model.md`、`VERSIONING.md`）。
+
+### 4.3 執行時呼叫的模型
+| 用途 | 供應商／模型 | 來源 |
+|---|---|---|
+| 對話與生成（線上） | DeepSeek `deepseek-flash` / `deepseek-v4-pro` | [deepseek-ai](https://github.com/deepseek-ai)（OpenAI 相容 API） |
+| 對話與生成（本機） | Qwen 3.8-27B（GGUF 量化，llama.cpp 推論） | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
+| 生圖 | MOSS Image | [OpenMOSS/MOSS-Image](https://github.com/OpenMOSS/MOSS-Image) |
+| 生圖／改圖 | Qwen Image 2.1 | [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) |
+| 生影片 | MiniMax H3 | [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) |
+
+### 4.4 其他關鍵依賴
+| 套件 | 用途 | 來源 |
+|---|---|---|
+| ComfyUI | 圖／影片生成後端 | [comfyanonymous/ComfyUI](https://github.com/comfyanonymous/ComfyUI) |
+| ffmpeg | 合併、重編碼、音視同步 | [FFmpeg/FFmpeg](https://github.com/FFmpeg/FFmpeg) |
+| FastAPI | 本機 API 服務 | [fastapi/fastapi](https://github.com/fastapi/fastapi) |
+| uvicorn | ASGI 伺服器 | [encode/uvicorn](https://github.com/encode/uvicorn) |
+| pywebview | 桌面原生視窗 | [r0x0r/pywebview](https://github.com/r0x0r/pywebview) |
+| PyInstaller | 打包成 exe | [pyinstaller/pyinstaller](https://github.com/pyinstaller/pyinstaller) |
+
+---
+
+## 五、免責聲明
 
 1. **本專案純粹為個人測試與技術研究用途**，不是商業產品，未經完整測試，**不保證任何正確性、穩定性或可用性**。
 2. 本專案**不散布任何模型權重、資料集或第三方節點**。使用者需自行取得並遵守各模型與節點原作者之授權條款（Apache-2.0／MIT／CC BY-NC-SA 等各自不同，**商用前請自行確認**）。

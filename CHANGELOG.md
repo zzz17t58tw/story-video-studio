@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-_（尚無）_
+### 文件
+- README 改為對外首頁並補齊背景資料：①模型與工作流（每個模型檔附官方 GitHub，工作流附作者 GitHub）②引用的節點包與「僅參考概念」專案的授權對照 ③ComfyUI 0.45.0 實測環境、必要／選配節點與升級踩坑 ④開發與執行所用的 AI 代理、技能與依賴來源（Hermes Agent、`story-video-studio` skill、LLM、FastAPI/pywebview/ffmpeg）⑤免責聲明（純測試用途）。
+- M1–M3 開發歷程移至 `docs/DEVLOG-M1-M3.md` 保留可追溯。
 
 ## [0.9.0] - 2026-11-18
 

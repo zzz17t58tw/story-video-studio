@@ -58,6 +58,33 @@ DEFAULT_FRAMES = 39           # 17*2+5 → 1.6 秒（contracts §3 實測成功�
 MAX_REFS = 9
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 480, 864   # 9:16 低清快速（驗收用）
 DEFAULT_STEPS, DEFAULT_CFG = 4, 1.0
+
+# ── 影片 LoRA（M9）────────────────────────────────────────────────
+# 掛法：走 timeline 每個 segment 的 `loras: [{name, strength, active}]`
+#   （導演台 director/segment_loras.py `normalize_lora_rows` L36-74；
+#    plan.py L906「editMode=global 時改讀 global_block.loras」，所以兩邊都要寫）。
+# name 就是 ComfyUI models/loras 下的檔名（= LoraLoaderModelOnly 的下拉值）。
+LORA_PIKA_TURBO4 = "pika_h3_flex_turbo_4step_ref2va.safetensors"
+LORA_PIKA_BF16 = "pika_h3_flex_ref2va_comfy_bf16.safetensors"
+LORA_CHOICES = (
+    ("", "不掛 LoRA"),
+    (LORA_PIKA_TURBO4, "Pika Flex Turbo 4step Ref2VA"),
+    (LORA_PIKA_BF16, "Pika Flex Ref2VA bf16"),
+)
+# Pika 官方建議（2026-11）：strength 1.0、cfg 1.0、euler/res_multistep＋simple、
+# flow shift video 12.0 / audio 3.0。⚠️ 音訊在 6 步以下會崩 → steps 至少 6。
+# ⚠️ Pika Flex／LightX2V／larryvrh／DMAD 四個加速家族**永不疊加，一支為限**。
+VIDEO_GEN_DEFAULTS = {
+    "lora": {"name": LORA_PIKA_BF16, "strength": 1.0, "active": True},
+    "steps": 6, "cfg": 1.0, "shiftVideo": 12.0, "shiftAudio": 3.0,
+    "sampler": "euler", "scheduler": "simple",
+}
+ACCEL_LORA_FAMILIES = (
+    ("pika_", "Pika Flex"),
+    ("lightx2v", "LightX2V"),
+    ("larryvrh", "larryvrh"),
+    ("dmad", "DMAD"),
+)
 DIRECTOR_NODE = 5             # 模板裡的 MiniMaxH3Director 節點 id
 SAVE_NODE = 7                 # 模板裡的 SaveVideo 節點 id
 POLL_INTERVAL = 1.5
@@ -223,11 +250,49 @@ def collect_refs(project: dict, shot: dict, allow_first_frame: bool = True) -> t
     return out, warnings, notes
 
 
+def lora_rows(raw: Any, default: dict | None = None) -> list[dict]:
+    """把設定/覆寫值正規化成導演台 segment.loras 格式；回 [] 表示不掛。
+
+    接受 {"name","strength","active"} 或直接字串檔名。回 [{name, strength, active}]（最多一支）。
+    """
+    row = raw if isinstance(raw, dict) else ({"name": raw} if isinstance(raw, str) else {})
+    name = _s(row.get("name") or row.get("lora_name") or (default or {}).get("name"))
+    if not name:
+        return []
+    strength = _clamp_float(row.get("strength", (default or {}).get("strength")), 0.0, 1.5, 1.0)
+    active = row.get("active", (default or {}).get("active", True))
+    return [{"name": name, "strength": strength, "active": bool(active)}]
+
+
+def lora_family(name: str) -> str:
+    """加速 LoRA 家族（判斷是否會疊到第二支加速）。不是加速類就回空字串。"""
+    n = _s(name).lower().replace("\\", "/").split("/")[-1]
+    for prefix, label in ACCEL_LORA_FAMILIES:
+        if prefix in n:
+            return label
+    return ""
+
+
+def check_lora_stack(rows: list[dict]) -> list[str]:
+    """回警告清單：同一個加速家族只能掛一支（永不疊加，官方明說會壞）。"""
+    fams = [lora_family(r.get("name")) for r in rows if r.get("active", True)]
+    fams = [f for f in fams if f]
+    out: list[str] = []
+    if len(fams) > 1:
+        out.append(f"偵測到多支加速 LoRA（{'、'.join(fams)}）：加速 LoRA 永不互相疊加，一支為限，"
+                   "請只留一支，否則畫質／音訊會壞")
+    return out
+
+
 def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
     """組導演台 r2v timeline（還沒送件、還沒上傳圖）。
 
     opts: width / height / frames / seed / 以及 refImageFiles（ordinal→ComfyUI input 檔名）。
     回傳 timeline dict；refs 的 imageFile 由呼叫端上傳後補（見 prepare_and_submit）。
+
+    opts["lora"] = {name, strength, active}（None／空 name＝不掛）：寫進 segment.loras 與
+    global.loras。editMode 一律 "global"，導演台在 global 模式下只認 global.loras 當每段 LoRA 堆疊，
+    segment.loras 只是同一份資料（前端卡片讀它、且換回 segment 模式時仍正確）。
 
     首幀（shot.images.first）的處理（實測校準後）：
       · 角色槽位有真圖時：首幀走 segment 的 startImage（i2v 式定錨），不佔 <Picture N> 編號。
@@ -305,6 +370,8 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
             "_ordinal": r["ordinal"],   # 內部用，送件前會剝掉
         })
 
+    seg_loras = lora_rows(opts.get("lora"))
+    warnings.extend(check_lora_stack(seg_loras))
     segment = {
         "id": uuid.uuid4().hex[:12],
         "start": 0,
@@ -319,7 +386,7 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
         "negativePrompt": "",
         "continuityFromPrev": False,
         "refImageSize": _clamp_int(opts.get("refMaxSize"), 32, 8192, min(width, height)),
-        "loras": [],
+        "loras": copy.deepcopy(seg_loras),
         "genImage": {"imageFile": "", "fileName": ""},
     }
     first = _s(notes.get("startImage") or "")
@@ -355,6 +422,7 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
             "genImage": {"imageFile": ""},
             "commonEnabled": False,
             "commonCollapsed": True,
+            "loras": copy.deepcopy(seg_loras),   # editMode=global：導演台讀這裡（plan.py L906）
         },
         "segments": [segment],
         "gen": {"defaultFrameCount": legal},
@@ -369,6 +437,7 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
             "startImage": first, "promptChars": len(prompt), "picturesUsed": used,
             "picMap": pic_map, "skippedPlaceholders": notes.get("skipped") or [],
             "firstFrameAsPicture": int(notes.get("firstFrameAsPicture") or 0),
+            "loras": copy.deepcopy(seg_loras),
         },
     }
     return timeline
@@ -509,8 +578,15 @@ def build_graph(project: dict, shot: dict, opts: dict | None = None) -> tuple[di
     graph = _template_graph()
     meta = timeline.get("_meta") or {}
     base_url = imagegen._comfy_base(project)
-    steps = _clamp_int(opts.get("steps"), 1, 60, DEFAULT_STEPS)
-    cfg = _clamp_float(opts.get("cfg"), 0.0, 30.0, DEFAULT_CFG)
+    # 生成參數：呼叫端給的優先，否則 Pika 官方建議值（M9）。steps 在導演台是 widget，shift/sampler/scheduler 也是。
+    d = VIDEO_GEN_DEFAULTS
+    steps = _clamp_int(opts.get("steps"), 1, 60, int(d["steps"]))
+    cfg = _clamp_float(opts.get("cfg"), 0.0, 30.0, float(d["cfg"]))
+    shift_video = _clamp_float(opts.get("shiftVideo"), 0.01, 100.0, float(d["shiftVideo"]))
+    shift_audio = _clamp_float(opts.get("shiftAudio"), 0.01, 100.0, float(d["shiftAudio"]))
+    sampler = _s(opts.get("sampler")) or _s(d["sampler"])
+    scheduler = _s(opts.get("scheduler")) or _s(d["scheduler"])
+    loras = list((timeline.get("_meta") or {}).get("loras") or [])
     dnode = _node(graph, DIRECTOR_NODE)
     wv = list(dnode.get("widgets_values") or [])
     if len(wv) < 12:
@@ -551,12 +627,18 @@ def build_graph(project: dict, shot: dict, opts: dict | None = None) -> tuple[di
     put("total_frames", int(meta.get("totalFrames") or DEFAULT_FRAMES))
     put("timeline_data", json.dumps(_strip_internal(timeline), ensure_ascii=False))
     put("steps", steps)
+    put("sampler", sampler)
+    put("scheduler", scheduler)
+    put("shift_video", shift_video)
+    put("shift_audio", shift_audio)
 
     over = {"6": {"fps": ["5", 2]}}   # CreateVideo 的 fps 直接吃導演台輸出（24），不另寫死
     api = _ui_to_api(graph, wv, over, base_url)
     chain = api.get(str(DIRECTOR_NODE)) or {}
     info = {"meta": meta, "warnings": list(timeline.get("_warnings") or []),
             "steps": steps, "cfg": cfg, "seed": int(meta.get("seed") or 0),
+            "shiftVideo": shift_video, "shiftAudio": shift_audio,
+            "sampler": sampler, "scheduler": scheduler, "loras": loras,
             "timeline": _strip_internal(timeline),
             "widgetMap": idx_by_name,
             "directorInputs": {k: (str(v)[:80] if k == "timeline_data" else v)
@@ -594,13 +676,34 @@ def _upload_refs(project: dict, shot: dict, timeline: dict, base_url: str) -> tu
     return files, warnings
 
 
+def with_video_settings(project: dict, opts: dict | None = None) -> dict:
+    """把專案 settings.video（不掛 LoRA 以外的參數）當作基底，opts 有的欄位優先（單鏡覆寫用）。"""
+    out = dict(VIDEO_GEN_DEFAULTS)
+    try:
+        sv = storage.video_settings(project)
+    except Exception:  # noqa: BLE001 — 設定壞掉不該擋生成
+        sv = {}
+    for k in ("steps", "cfg", "shiftVideo", "shiftAudio", "sampler", "scheduler"):
+        if sv.get(k) not in (None, ""):
+            out[k] = sv[k]
+    if "lora" in sv:
+        out["lora"] = sv["lora"]
+    for k, v in (opts or {}).items():
+        if v is not None and v != "":
+            out[k] = v
+    # lora 給空 dict／"none" 也代表「明確指定不掛」
+    if isinstance((opts or {}).get("lora"), (dict, str)) and not lora_rows(opts.get("lora")):
+        out["lora"] = None
+    return out
+
+
 # ── 4. 送件 ────────────────────────────────────────────────────
 def submit(project: dict, shot: dict, opts: dict | None = None) -> dict:
     """組 timeline → 上傳參考圖 → 送 ComfyUI。回 {pid, info, timeline, refFiles, prompt}。不落地。
 
     例外一律轉成 H3GenError（中文）。
     """
-    opts = dict(opts or {})
+    opts = with_video_settings(project, opts)
     base_url = imagegen._comfy_base(project)
     ok, msg, _info = comfy.comfy_available(base_url)
     if not ok:
@@ -786,6 +889,15 @@ class H3JobError(Exception):
     """送件前的可預期錯誤（找不到鏡頭／已在跑）。"""
 
 
+def _lora_note(info: dict) -> str:
+    """影片備註／log 用的 LoRA 片段（沒有就空字串）。"""
+    rows = info.get("loras") or []
+    if not rows:
+        return ""
+    r = rows[0]
+    return f"｜LoRA {r.get('name')}@{r.get('strength')}"
+
+
 def _public(job: dict) -> dict:
     return {k: v for k, v in job.items() if not k.startswith("_")}
 
@@ -827,7 +939,7 @@ def start_job(project: dict, slug: str, shot_id: str, opts: dict | None = None) 
             "startedAt": "", "finishedAt": "", "elapsed": 0.0,
             "pid": "", "position": 0, "queueState": "",
             "path": "", "url": "", "error": "", "warnings": [],
-            "frames": None, "width": None, "height": None, "steps": None, "seed": None,
+            "frames": None, "width": None, "height": None, "steps": None, "seed": None, "loras": [],
             "duration": None, "timeout": _clamp_int(opts.get("timeout"), 30, 1800, int(MAX_WAIT)),
             "_opts": dict(opts),
         }
@@ -888,7 +1000,9 @@ def _run_inner(job_id: str, slug: str, shot_id: str, opts: dict, t_all: float) -
         meta = info.get("meta") or {}
         _set(job, pid=sub["pid"], phase="ComfyUI 生成中…", warnings=info.get("warnings") or [],
              frames=meta.get("frames"), width=meta.get("width"), height=meta.get("height"),
-             steps=info.get("steps"), seed=info.get("seed"))
+             steps=info.get("steps"), seed=info.get("seed"), loras=info.get("loras") or [],
+             cfg=info.get("cfg"), shiftVideo=info.get("shiftVideo"), shiftAudio=info.get("shiftAudio"),
+             sampler=info.get("sampler"), scheduler=info.get("scheduler"))
 
         def on_tick(elapsed: float, q: dict) -> None:
             _set(job, elapsed=elapsed, position=int(q.get("position") or 0),
@@ -906,9 +1020,11 @@ def _run_inner(job_id: str, slug: str, shot_id: str, opts: dict, t_all: float) -
         if fshot is None:
             raise H3GenError(f"影片已生成（{res['path']}），但寫回時找不到鏡頭 {shot_id}")
         note = (f"選用時間 {time.strftime('%H:%M:%S')}｜pid {sub['pid']}｜{res.get('vcodec') or '?'}"
-                f"+{res.get('acodec') or '無音'}")
+                f"+{res.get('acodec') or '無音'}{_lora_note(info)}")
         fshot["video"] = {"path": res["path"], "status": "done", "taskType": "r2v",
-                          "seed": info.get("seed"), "note": note}
+                          "seed": info.get("seed"), "note": note,
+                          "lora": (info.get("loras") or [{}])[0].get("name", ""),
+                          "steps": info.get("steps"), "cfg": info.get("cfg")}
         fshot["updatedAt"] = storage.now_iso()
         pipeline = fresh.setdefault("pipeline", {})
         logs = pipeline.setdefault("logs", [])
@@ -917,8 +1033,8 @@ def _run_inner(job_id: str, slug: str, shot_id: str, opts: dict, t_all: float) -
             "msg": (f"H3 r2v 影片完成：{res['path']}｜{elapsed} 秒（ComfyUI 內 {res['elapsed']} 秒）"
                     f"｜pid {sub['pid']}｜{meta.get('width')}x{meta.get('height')}"
                     f"｜frames={meta.get('frames')}（{meta.get('durationSec')}s）｜steps={info.get('steps')}"
-                    f"｜seed={info.get('seed')}"),
-            "pid": sub["pid"], "elapsed": elapsed, "path": res["path"],
+                    f"｜seed={info.get('seed')}{_lora_note(info)}"),
+            "pid": sub["pid"], "elapsed": elapsed, "path": res["path"], "lora": (info.get("loras") or [{}])[0].get("name", ""),
             "taskType": "r2v", "seed": info.get("seed"), "frames": meta.get("frames"),
             "width": meta.get("width"), "height": meta.get("height"), "steps": info.get("steps"),
             "refs": [r["path"] for r in meta.get("refs") or []],
@@ -962,10 +1078,15 @@ def video_preset(opts: dict | None = None) -> dict:
     width = _clamp_int(opts.get("width"), 32, 8192, 720)
     height = _clamp_int(opts.get("height"), 32, 8192, 1280)
     frames = legal_frames(_clamp_int(opts.get("frames"), 5, 100000, 121))
-    steps = _clamp_int(opts.get("steps"), 1, 60, 12)
-    cfg = _clamp_float(opts.get("cfg"), 0.0, 30.0, DEFAULT_CFG)
+    steps = _clamp_int(opts.get("steps"), 1, 60, int(VIDEO_GEN_DEFAULTS["steps"]))
+    cfg = _clamp_float(opts.get("cfg"), 0.0, 30.0, float(VIDEO_GEN_DEFAULTS["cfg"]))
     out = {"width": width, "height": height, "frames": frames, "steps": steps, "cfg": cfg,
            "durationSec": round(frames / FRAME_RATE, 3)}
+    for k in ("shiftVideo", "shiftAudio", "sampler", "scheduler"):
+        if opts.get(k) not in (None, ""):
+            out[k] = opts[k]
+    rows = lora_rows(opts.get("lora"))
+    out["lora"] = rows[0] if rows else None
     for k in ("seed", "timeout"):
         if opts.get(k) not in (None, ""):
             out[k] = opts[k]
@@ -1194,6 +1315,7 @@ def _run_video_batch_items(job_id: str, t_all: float) -> None:
                     it.update({"pid": sub["pid"], "phase": "ComfyUI 生成中…",
                                "width": meta.get("width"), "height": meta.get("height"),
                                "frames": meta.get("frames"), "steps": info.get("steps"),
+                               "loras": info.get("loras") or [],
                                "warnings": info.get("warnings") or []})
                 j["pid"] = sub["pid"]
             _vb_set(job_id, _sent)
@@ -1223,7 +1345,9 @@ def _run_video_batch_items(job_id: str, t_all: float) -> None:
             fshot["video"] = {
                 "path": res["path"], "status": "done", "taskType": "r2v", "seed": info.get("seed"),
                 "note": (f"選用時間 {time.strftime('%H:%M:%S')}｜pid {sub['pid']}｜"
-                         f"{res.get('vcodec') or '?'}+{res.get('acodec') or '無音'}｜batch {job_id}"),
+                         f"{res.get('vcodec') or '?'}+{res.get('acodec') or '無音'}{_lora_note(info)}｜batch {job_id}"),
+                "lora": (info.get("loras") or [{}])[0].get("name", ""),
+                "steps": info.get("steps"), "cfg": info.get("cfg"),
             }
             fshot["updatedAt"] = storage.now_iso()
             logs = fresh.setdefault("pipeline", {}).setdefault("logs", [])
@@ -1233,8 +1357,8 @@ def _run_video_batch_items(job_id: str, t_all: float) -> None:
                         f"（ComfyUI 內 {res['elapsed']} 秒）｜pid {sub['pid']}"
                         f"｜{meta.get('width')}x{meta.get('height')}"
                         f"｜frames={meta.get('frames')}（{meta.get('durationSec')}s）"
-                        f"｜steps={info.get('steps')}｜seed={info.get('seed')}"),
-                "pid": sub["pid"], "elapsed": elapsed, "path": res["path"],
+                        f"｜steps={info.get('steps')}｜seed={info.get('seed')}{_lora_note(info)}"),
+                "pid": sub["pid"], "elapsed": elapsed, "path": res["path"], "lora": (info.get("loras") or [{}])[0].get("name", ""),
                 "taskType": "r2v", "seed": info.get("seed"), "frames": meta.get("frames"),
                 "width": meta.get("width"), "height": meta.get("height"), "steps": info.get("steps"),
                 "refs": [r["path"] for r in meta.get("refs") or []],
