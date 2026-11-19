@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Story Video Studio</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── 左側：專案列表 + 六大區塊導覽 ───────────────────── -->
+  <aside id="sidebar">
+    <header class="brand">
+      <h1>Story Video Studio</h1>
+      <p class="sub">故事 → 分鏡 → 影片</p>
+    </header>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>專案</h2>
+        <button id="btn-new-project" class="btn btn-small" type="button">＋ 新專案</button>
+      </div>
+      <ul id="project-list" class="project-list"></ul>
+      <p id="project-empty" class="hint hidden">尚無專案，按「＋ 新專案」開始。</p>
+    </section>
+
+    <nav id="nav" class="panel">
+      <h2>製作流程</h2>
+      <ul>
+        <li><button class="nav-btn active" data-view="story" type="button"><span class="step">1</span>故事</button></li>
+        <li><button class="nav-btn" data-view="characters" type="button"><span class="step">2</span>人物</button></li>
+        <li><button class="nav-btn" data-view="scenes" type="button"><span class="step">3</span>場景</button></li>
+        <li><button class="nav-btn" data-view="script" type="button"><span class="step">4</span>劇本</button></li>
+        <li><button class="nav-btn" data-view="shots" type="button"><span class="step">5</span>鏡頭</button></li>
+        <li><button class="nav-btn" data-view="generate" type="button"><span class="step">6</span>生成與合併</button></li>
+        <li class="nav-divider"></li>
+        <li><button class="nav-btn" data-view="settings" type="button"><span class="step">⚙</span>設定 / 原始資料</button></li>
+      </ul>
+    </nav>
+
+    <footer class="side-foot">
+      <span id="project-meta-line" class="hint"></span>
+    </footer>
+  </aside>
+
+  <!-- ── 右側：內容區 ─────────────────────────────────── -->
+  <main id="main">
+    <header id="topbar">
+      <div id="title-line">
+        <strong id="current-project-name">請選擇專案</strong>
+        <span id="current-project-slug" class="hint"></span>
+      </div>
+      <div id="save-status" class="save-status idle">尚未載入</div>
+    </header>
+
+    <div id="content">
+      <section id="view-story" class="view active"></section>
+      <section id="view-characters" class="view"></section>
+      <section id="view-scenes" class="view"></section>
+      <section id="view-script" class="view"></section>
+      <section id="view-shots" class="view"></section>
+      <section id="view-generate" class="view"></section>
+      <section id="view-settings" class="view"></section>
+    </div>
+  </main>
+</div>
+
+<!-- ── 全域狀態列：GPU 可用 VRAM（每 15 秒更新一次）───────── -->
+<div id="gpu-strip" class="gpu-strip hidden">
+  <span id="gpu-strip-text">GPU：—</span>
+  <span id="gpu-strip-warn" class="gpu-strip-warn hidden"></span>
+</div>
+
+<!-- ── 新專案彈窗 ─────────────────────────────────────── -->
+<div id="modal-new" class="modal hidden">
+  <div class="modal-box">
+    <h3>建立新專案</h3>
+    <label class="field">
+      <span>專案名稱（可中文）</span>
+      <input id="new-name" type="text" placeholder="例如：小紅帽新說" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>畫面比例</span>
+      <select id="new-aspect">
+        <option value="9:16">9:16（直式，短影音）</option>
+        <option value="16:9">16:9（橫式）</option>
+        <option value="1:1">1:1（方形）</option>
+      </select>
+    </label>
+    <p id="new-error" class="error hidden"></p>
+    <div class="modal-actions">
+      <button id="new-cancel" class="btn" type="button">取消</button>
+      <button id="new-create" class="btn btn-primary" type="button">建立</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+
+<!-- ── 刪除確認（M2a：列出引用明細）────────────────────── -->
+<div id="modal-confirm" class="modal hidden">
+  <div class="modal-box">
+    <h3 class="cf-title">刪除確認</h3>
+    <div class="cf-body"></div>
+    <div class="modal-actions">
+      <button class="btn cf-cancel" type="button">取消</button>
+      <button class="btn btn-danger cf-ok" type="button">仍要刪除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 圖片放大（M2a 參考圖）────────────────────────────── -->
+<div id="lightbox" class="lightbox hidden">
+  <img alt="放大檢視">
+  <div class="lb-caption"></div>
+  <button class="lb-close" type="button" title="關閉（Esc）">✕</button>
+</div>
+</body>
+</html>
