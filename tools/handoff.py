@@ -255,6 +255,11 @@ def cmd_check(args: list[str]) -> int:
 
         # git 對帳：宣稱的檔案 vs 實際改的檔案
         claimed = set(d["meta"].get("files_list") or d["section_files"])
+        # 交接單本身也是分支產物，不算「宣稱沒改卻偷改」
+        try:
+            claimed.add(p.relative_to(ROOT).as_posix())
+        except ValueError:
+            pass
         actual = git_branch_diff(name)
         if actual is None:
             print("  ℹ 找不到同名 git 分支，跳過 diff 對帳")
