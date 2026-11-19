@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### 修正
+
+- **`/api/health` 的版本戳是硬編碼的舊里程碑**（`milestone: "M5b+M6"`，`FastAPI(version=...)` 亦同），
+  發到 0.9.1 之後驗收時無法用 health 判斷版本。改由新增的 `app/version.py` 讀 `VERSION` 檔：
+  health 回 `version`／`milestone: v<版本>`／`paths`（frozen、bundle、data、projects）；
+  `StoryVideoStudio.spec` 的 `datas` 收錄 `VERSION`。
+
+### 效能
+
+- **設定頁輪詢的兩支狀態 API 在服務沒開時各要等 ~2 秒**（這台機器對未監聽埠回 TCP 拒絕要 ~2 秒，不是即時 RST）：
+  `/api/gpu/status` 與 `/api/llm/status` 加唯讀探測快取（成功 5 秒／失敗 10 秒），
+  實測重複查詢由 ~2100ms 降到 2–9ms；GPU 三個動作（release-comfy／stop-llama／start-llama）後主動清快取，狀態不會落後。
+  動作路徑（chat、生圖、生影片）完全不受快取影響。
+
+### 整理
+
+- 移除未使用的 import：`server.py`（HTTPException／FileResponse／PlainTextResponse）、
+  `deploy.py`（Callable、函式內未用的 `from pathlib import Path`）、`imagegen.py`（shutil）；`server.py` 換行統一為 CRLF。
+- 清掉 `__pycache__/`、`temp/` 執行殘留與 `launcher.log`（執行痕跡不入庫）。
+
+### 驗收（本次整理後實跑）
+
+- 全 API 冒煙：10 個專案全載入、品質基準專案 `validate` **0 error**、`assemble/plan` 200（6 段）、`outputs` 1 支成品；
+  專案 CRUD（建立／讀回／更新／刪除進 `_trash`）與錯誤輸入（空名稱 400、重複代號 400、不存在 404）皆正確。
+- 前端七個分頁無 JS 錯誤、無 `undefined`、無 `[object Object]`；成品清單正常回 `output/final_*.mp4`。
+
 ## [0.9.1] - 2026-11-19
 
 基線版本：功能與 0.9.0 相同，差別是把「多對話／多分支並行開發」的協作機制正式入庫，

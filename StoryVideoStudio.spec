@@ -17,6 +17,7 @@ block_cipher = None
 datas = [
     ("static", "static"),
     ("templates", "templates"),
+    ("VERSION", "."),  # app/version.py 靠它回報版本
 ]
 import os
 

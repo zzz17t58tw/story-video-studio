@@ -11,8 +11,8 @@ import sys
 import time
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, File, Query, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -21,11 +21,12 @@ from . import gpu
 from . import assemble as asm
 from . import paths
 from . import storage
+from . import version
 from .storage import StorageError
 
 log = logging.getLogger("svs")
 
-app = FastAPI(title="Story Video Studio", version="0.6-m5b-m6")
+app = FastAPI(title="Story Video Studio", version=version.get())
 
 
 def _fail(status: int, message: str):
@@ -42,13 +43,16 @@ async def _unhandled(request: Request, exc: Exception):
 # ── API ─────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
+    ver = version.get()
     return {
         "ok": True,
         "app": "story-video-studio",
-        "milestone": "M5b+M6",
+        "version": ver,
+        "milestone": f"v{ver}",
         "pid": os.getpid(),
         "dataDir": str(storage.PROJECTS_DIR),
         "time": storage.now_iso(),
+        "paths": paths.describe(),
     }
 
 
@@ -1296,6 +1300,7 @@ def api_gpu_status():
 @app.post("/api/gpu/release-comfy")
 def api_gpu_release_comfy():
     try:
+        gpu.clear_probe_cache()
         res = gpu.release_comfy()
     except gpu.GpuError as e:
         return _gpu_fail(e)
@@ -1305,6 +1310,7 @@ def api_gpu_release_comfy():
 @app.post("/api/gpu/stop-llama")
 def api_gpu_stop_llama():
     try:
+        gpu.clear_probe_cache()
         res = gpu.stop_llama()
     except gpu.GpuError as e:
         return _gpu_fail(e)
@@ -1314,6 +1320,7 @@ def api_gpu_stop_llama():
 @app.post("/api/gpu/start-llama")
 def api_gpu_start_llama(body: Optional[GpuStartBody] = None):
     try:
+        gpu.clear_probe_cache()
         res = gpu.start_llama(body.model if body else None)
     except gpu.GpuError as e:
         return _gpu_fail(e)

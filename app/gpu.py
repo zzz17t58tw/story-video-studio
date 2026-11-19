@@ -91,6 +91,27 @@ def llama_args(model_file: str | None = None) -> list[str]:
 
 START_TIMEOUT_S = 120.0
 PROBE_TIMEOUT_S = 2.5
+# 這台機器對「未監聽的埠」回 TCP 拒絕要 ~2 秒（防火牆丟包而非 RST），
+# 而設定頁每 15 秒會輪詢 status()：不快取就會反覆卡住、也讓 llm/status 重複探測同一埠。
+_PROBE_TTL_S = 5.0
+_probe_cache: dict[str, tuple[float, dict]] = {}
+
+
+def clear_probe_cache() -> None:
+    """動作（釋放／啟停模型）之後呼叫，讓下次 status() 重新探測而不是回舊值。"""
+    _probe_cache.clear()
+
+
+def _cached_probe(key: str, fn, ttl: float = _PROBE_TTL_S):
+    """同一輪頁面刷新只探一次（僅限唯讀探測；動作路徑一律直接呼叫）。"""
+    now = time.time()
+    hit = _probe_cache.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _probe_cache[key] = (time.time(), val)
+    return val
+
 # 本機 LLM 要「有餘裕」至少留這麼多 VRAM，否則層會落到 CPU
 LLAMA_NEED_FREE_MB = 2048
 
@@ -389,9 +410,9 @@ def start_llama(model_file: str | None = None) -> dict:
 
 # ── 8. 彙整狀態 ────────────────────────────────────────────────────
 def status() -> dict:
-    v = vram()
-    c = comfy_status()
-    l = llama_status()
+    v = _cached_probe("vram", vram)
+    c = _cached_probe("comfy", comfy_status)
+    l = _cached_probe("llama", llama_status)
     warn = ""
     if v["freeMB"] is not None and v["freeMB"] < LLAMA_NEED_FREE_MB:
         warn = (f"GPU 只剩 {v['freeMB'] / 1024:.1f} GB 可用；本機 LLM 可能落到 CPU（會很慢）。"

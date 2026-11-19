@@ -24,7 +24,6 @@ import contextlib
 import json
 import random
 import re
-import shutil
 import threading
 import time
 import uuid

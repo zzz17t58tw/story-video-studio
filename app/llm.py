@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import re
 import socket
 import urllib.error
@@ -48,6 +49,11 @@ ENV_KEYS = {"online": "DEEPSEEK_API_KEY", "custom": "LLM_API_KEY"}
 # （86400 秒），等於不設上限；可用環境變數 SVS_LLM_TIMEOUT（秒）覆寫。
 CONNECT_TIMEOUT = 5.0
 TOTAL_TIMEOUT = float(os.environ.get("SVS_LLM_TIMEOUT") or 86400)
+
+# 本機推理模型（Qwen3.x 等）的思考內容也算進 max_tokens，長 JSON 任務常被吃到正文空白
+# （finish_reason=length、content 為空）。本機端點預設關掉思考；SVS_LLM_THINKING=on 可強制開回。
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+NO_THINK_PAYLOAD = {"chat_template_kwargs": {"enable_thinking": False}}
 
 # OpenAI 相容伺服器常見的「模型不存在」錯誤碼
 _MODEL_MISSING_HINTS = ("model_not_found", "does not exist", "not found", "invalid model", "no model")
@@ -323,6 +329,32 @@ def resolve_model(base_url: str | None = None, model: str | None = None,
     return name, models
 
 
+# ── /models 探測快取 ────────────────────────────────────────────────
+# 這台機器連「沒開的埠」要 ~2 秒才回 TCP 拒絕，而設定頁會輪詢 llm/status；
+# 不快取就每次白等 2 秒（且與 gpu.status 重複探測同一埠）。只快取唯讀探測，chat 不受影響。
+_MODELS_TTL_S = 5.0
+_MODELS_FAIL_TTL_S = 10.0
+_models_cache: dict[str, tuple[float, list[str], str, int]] = {}
+
+
+def _cached_models(base_url: str, api_key: str = "", provider: str = "local") -> list[str]:
+    key = f"{provider}|{base_url}"
+    hit = _models_cache.get(key)
+    if hit:
+        ttl = _MODELS_TTL_S if not hit[2] else _MODELS_FAIL_TTL_S
+        if time.time() - hit[0] < ttl:
+            if hit[2]:
+                raise LLMError(hit[2], status=hit[3] or 502)
+            return hit[1]
+    try:
+        items = list_models(base_url, api_key=api_key, provider=provider)
+    except LLMError as e:
+        _models_cache[key] = (time.time(), [], str(e), getattr(e, "status", 502) or 502)
+        raise
+    _models_cache[key] = (time.time(), items, "", 0)
+    return items
+
+
 def status(llm_cfg: dict | None = None) -> dict:
     """給 GET /api/llm/status 用；永遠回結構，不拋例外。
 
@@ -351,7 +383,7 @@ def status(llm_cfg: dict | None = None) -> dict:
         return info
 
     try:
-        models = list_models(conf["baseUrl"], api_key=conf["apiKey"], provider=provider)
+        models = _cached_models(conf["baseUrl"], api_key=conf["apiKey"], provider=provider)
     except LLMError as e:
         info.update(baseUrl=conf["baseUrl"], error=str(e))
         return info
@@ -378,17 +410,57 @@ def status(llm_cfg: dict | None = None) -> dict:
     }
 
 
+def _is_local_host(base_url: str) -> bool:
+    """baseUrl 是否指向本機（127.0.0.1 / localhost / [::1] / 0.0.0.0）。"""
+    host = (base_url or "").split("://", 1)[-1].split("/", 1)[0]
+    host = host.rsplit(":", 1)[0] if host.count(":") and not host.endswith("]") else host
+    return host.strip("[]").lower() in _LOCAL_HOSTS
+
+
+def thinking_disabled(provider: str, base_url: str, thinking: bool | None = None) -> bool:
+    """這一通要不要關掉模型思考。
+
+    優先序：函式參數 → 環境變數 SVS_LLM_THINKING → 預設（本機端點關、遠端服務開）。
+    """
+    if thinking is not None:
+        return not thinking
+    flag = (os.environ.get("SVS_LLM_THINKING") or "").strip().lower()
+    if flag in ("on", "1", "true", "yes"):
+        return False
+    if flag in ("off", "0", "false", "no"):
+        return True
+    return provider in ("local", "custom") and _is_local_host(base_url)
+
+
+def _extract_reply(body: dict, used: str) -> dict:
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise LLMError(f"模型回應格式不認識（缺 choices）：{str(body)[:300]}", status=502)
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    msg = choice.get("message") or {}
+    reply = msg.get("content")
+    if reply is None:
+        reply = choice.get("text") or ""
+    return {"reply": str(reply), "model": body.get("model") or used,
+            "usage": body.get("usage") or {}, "finish_reason": choice.get("finish_reason")}
+
+
 def chat(
     messages: list[dict],
     llm_cfg: dict | None = None,
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    thinking: bool | None = None,
 ) -> dict:
     """POST /chat/completions（非串流）。回 {reply, model, usage, ...}；失敗拋 LLMError。
 
     llm_cfg = 專案的 settings.llm（provider/baseUrl/model/temperature）；apiKey 只在後端解析。
     指定/自動的模型先用 /models 解析；/models 掛掉時仍直接用指定 model 打 chat。
+
+    thinking：False＝送 chat_template_kwargs.enable_thinking=false（本機推理模型不再把
+    max_tokens 花在思考上）；None＝依 provider/端點自動判斷（見 thinking_disabled）。
+    服務不認這個欄位時自動去掉重試一次，不會因此壞掉。
     """
     conf = resolve_config(llm_cfg)
     provider, base, key = conf["provider"], conf["baseUrl"], conf["apiKey"]
@@ -416,22 +488,31 @@ def chat(
             pass
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
-    body = _request_json(f"{base}/chat/completions", payload, api_key=key, provider=provider, base_url=base)
-    choices = body.get("choices") if isinstance(body, dict) else None
-    if not isinstance(choices, list) or not choices:
-        raise LLMError(f"模型回應格式不認識（缺 choices）：{str(body)[:300]}", status=502)
-    choice = choices[0] if isinstance(choices[0], dict) else {}
-    msg = choice.get("message") or {}
-    reply = msg.get("content")
-    if reply is None:
-        reply = choice.get("text") or ""
-    if not str(reply).strip():
+    no_think = thinking_disabled(provider, base, thinking)
+    if no_think:
+        payload.update(NO_THINK_PAYLOAD)
+
+    def send(p: dict) -> dict:
+        try:
+            return _request_json(f"{base}/chat/completions", p, api_key=key, provider=provider, base_url=base)
+        except LLMError:
+            if "chat_template_kwargs" not in p:
+                raise
+            # 服務不認這個欄位（非 llama.cpp / 嚴格驗證）→ 拿掉再送一次
+            fallback = {k: v for k, v in p.items() if k != "chat_template_kwargs"}
+            return _request_json(f"{base}/chat/completions", fallback, api_key=key, provider=provider, base_url=base)
+
+    body = send(payload)
+    out = _extract_reply(body, used)
+    if not out["reply"].strip() and not no_think and thinking is None:
+        # 沒關思考卻拿到空正文：典型是思考吃光 max_tokens → 關掉思考再試一次
+        payload.update(NO_THINK_PAYLOAD)
+        retry = _extract_reply(send(payload), used)
+        if retry["reply"].strip():
+            return retry
+        out = retry
+    if not out["reply"].strip():
         # 常見於模型只吐 reasoning/被截斷；把 finish_reason 帶出來方便判斷
-        finish = choice.get("finish_reason")
-        raise LLMError(f"模型回覆是空的（finish_reason={finish}）：請調整提示或換模型", status=502)
-    return {
-        "reply": str(reply),
-        "model": body.get("model") or used,
-        "usage": body.get("usage") or {},
-        "finish_reason": choice.get("finish_reason"),
-    }
+        raise LLMError(f"模型回覆是空的（finish_reason={out['finish_reason']}）："
+                       "思考內容可能吃光輸出上限，請換模型或在設定關掉思考", status=502)
+    return out

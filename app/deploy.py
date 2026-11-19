@@ -19,7 +19,6 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Callable
 
 from . import h3compose, llm, prompts, storage, storygen
 
@@ -136,7 +135,6 @@ def _media_paths(old: dict) -> list[str]:
 
 def _delete_media(slug: str, paths: list[str]) -> int:
     """只刪「本專案 media/ 底下」的舊檔（防路徑穿越）；回刪掉幾個。"""
-    from pathlib import Path
     root = storage.project_dir(slug).resolve()
     n = 0
     for rel in paths:
