@@ -921,6 +921,269 @@ def apply_preview(slug: str, preview: dict, overwrite: bool) -> dict:
     }
 
 
+# ── 逐步落地（每完成一層就寫檔：模型一次只算一小塊，失敗時前面的成果不會白做）──
+def _save_now(slug: str, project: dict) -> None:
+    """驗證後原子寫入（逐步落地用；不動 media 檔）。"""
+    errors = storage.validate_project(project)
+    if errors:
+        raise storage.StorageError("寫入後結構不合法：" + "；".join(errors[:5]))
+    project.setdefault("meta", {})["updatedAt"] = storage.now_iso()
+    storage.ensure_media_dirs(slug)
+    storage._write_json_atomic(storage.project_file(slug), project)
+
+
+def _land_chars(project: dict, chars: list[dict]) -> list[str]:
+    now = project.get("characters")
+    if not isinstance(now, list):
+        now = project["characters"] = []
+    existing = {c.get("id"): c for c in now if isinstance(c, dict)}
+    out: list[str] = []
+    for ch in chars:
+        cid = ch["id"]
+        if cid in existing:
+            _merge_in_place(existing[cid], ch)
+        else:
+            now.append(ch)
+        out.append(cid)
+    return out
+
+
+def _land_scenes(project: dict, scenes: list[dict]) -> list[str]:
+    now = project.get("scenes")
+    if not isinstance(now, list):
+        now = project["scenes"] = []
+    existing = {s.get("id"): s for s in now if isinstance(s, dict)}
+    out: list[str] = []
+    for sc in scenes:
+        sid = sc["id"]
+        if sid in existing:
+            _merge_in_place(existing[sid], sc)
+        else:
+            now.append(sc)
+        out.append(sid)
+    return out
+
+
+def _land_script(project: dict, sp: dict) -> tuple[dict, dict]:
+    """把一集（場次＋beats）寫進 project，回 (ep_out, 預覽場次 id → 實際 id)。"""
+    script = project.setdefault("script", {"episodes": []})
+    eps = script.get("episodes")
+    if not isinstance(eps, list):
+        eps = script["episodes"] = []
+    ep_id = storage._next_seq([e.get("id") for e in eps if isinstance(e, dict)], "e")
+    ep_out: dict = {"id": ep_id, "title": sp.get("title") or "未命名集", "scenes": []}
+    if sp.get("sourceChapterId"):
+        ep_out["sourceChapterId"] = sp["sourceChapterId"]
+    id_map: dict[str, str] = {}
+    for i, es in enumerate(sp.get("scenes") or []):
+        es_id = f"{ep_id}s{i + 1:02d}"
+        beats = []
+        for b in es.get("beats") or []:
+            beats.append({"id": storage.next_id(beats, "b"), "type": b.get("type") or "dialogue",
+                          "characterId": b.get("characterId") or None, "line": b.get("line") or "",
+                          "emotion": b.get("emotion") or "", "notes": b.get("notes") or ""})
+        ep_out["scenes"].append({"id": es_id, "title": es.get("title") or "",
+                                 "sceneId": es.get("sceneId") or None,
+                                 "characterIds": list(es.get("characterIds") or []),
+                                 "summary": es.get("summary") or "", "beats": beats})
+        if es.get("id"):
+            id_map[es["id"]] = es_id
+    eps.append(ep_out)
+    return ep_out, id_map
+
+
+def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map: dict) -> list[str]:
+    """把某一場的鏡頭寫進 project（no 重排）。"""
+    shots_now = project.get("shots")
+    if not isinstance(shots_now, list):
+        shots_now = project["shots"] = []
+    ts = storage.now_iso()
+    fps = int((project.get("meta") or {}).get("fps") or 24)
+    created: list[str] = []
+    for sh in shots:
+        es_id = id_map.get(sh.get("episodeSceneId"), sh.get("episodeSceneId"))
+        es = next((s for s in ep_out["scenes"] if s.get("id") == es_id), None)
+        if es is None:
+            raise storage.StorageError(f"鏡頭引用不存在的場次 {es_id}")
+        new_shot = {
+            "id": storage.next_id(shots_now, "sh"), "no": 0,
+            "episodeSceneId": es_id, "sceneId": es.get("sceneId") or None,
+            "characterIds": list(sh.get("characterIds") or []),
+            "spec": sh.get("spec") or {},
+            "durationSec": sh.get("durationSec") or 5,
+            "promptZh": sh.get("promptZh") or "", "promptEn": sh.get("promptEn") or "",
+            "dialogue": [], "beats": sh.get("beats") or [],
+            "dialogLineRefs": list(sh.get("dialogLineRefs") or []),
+            "stageIds": [],
+            "sourceChapterId": sp.get("sourceChapterId") or None,
+            "referencePlan": {"slots": [], "weakReferences": [], "promptPlaceholders": {}},
+            "images": {"first": "", "last": ""},
+            "video": {"path": "", "status": "none", "taskType": "r2v", "seed": 0, "note": ""},
+            "voice": {"path": "", "engine": ""},
+            "durationFrames": h3compose.frames_for(sh.get("durationSec") or 5, fps)["legal"],
+            "updatedAt": ts,
+        }
+        shots_now.append(new_shot)
+        created.append(new_shot["id"])
+    for j, s in enumerate(shots_now):
+        if isinstance(s, dict):
+            s["no"] = j + 1
+    return created
+
+
+def run_steps_landing(job_id: str, slug: str, cfg: dict, opts: dict,
+                      progress, done_steps: list) -> dict:
+    """一鍵佈署的逐步落地版：cast→寫檔、locations→寫檔、script→寫檔、每場 shots→寫檔。
+
+    為什麼要這樣做（使用者 2026-11-20 明確要求）：
+    - 一次要模型算完四層、再一次寫入，輸出越大越容易「算完結果是空的」（配額被吃光）；
+      而且任何一步失敗＝十幾分鐘全白做。
+    - 改成每層各自生成、驗證通過立刻落地，模型每次只扛一小包，失敗時前面的資料留著。
+    """
+    t_start = time.time()
+    project = storage.load_project(slug)
+    fps = int((project.get("meta") or {}).get("fps") or 24)
+    timings: dict[str, float] = {}
+    warn_by: dict[str, list] = {}
+    written = {"characters": 0, "scenes": 0, "episodeScenes": 0, "shots": 0}
+    agg = {"characters": [], "scenes": [], "episodes": 0, "shots": [], "episodeId": "", "mediaDeleted": 0}
+    old_images: list[str] = []
+    purged = {"done": False}
+
+    def flush_job() -> None:
+        warnings = []
+        for k in ("cast", "locations", "script", "shots"):
+            warnings += [w for w in (warn_by.get(k) or [])]
+        _set(job_id, written=dict(written), warnings=warnings, warningsByStep=dict(warn_by),
+             timings=dict(timings))
+
+    try:
+        # 1) 角色卡 → 落地
+        progress("cast", "產生角色卡…")
+        t = time.time()
+        first_c = 1 if opts["overwrite"] else int(
+            re.sub(r"\D", "", storage.next_id(project.get("characters") or [], "c")) or 1)
+        cast = gen_cast(project, cfg, opts, first_seq=first_c)
+        chars = cast["preview"]["characters"]
+        warn_by["cast"] = cast["warnings"]
+        timings["cast"] = round(time.time() - t, 1)
+        done_steps.append("cast")
+        # 覆蓋：**等第一步成功後才清空**，這樣 cast 就失敗時舊資料還在
+        if opts["overwrite"] and not purged["done"]:
+            old = _purge(project)
+            old_images = _media_paths(old)
+            purged["done"] = True
+        _land_chars(project, chars)
+        _save_now(slug, project)
+        written["characters"] = len(chars)
+        agg["characters"] = [c["id"] for c in chars]
+        flush_job()
+        _check_cancel(job_id)
+
+        # 2) 場景卡 → 落地
+        progress("locations", "產生場景卡…")
+        t = time.time()
+        first_sc = 1 if opts["overwrite"] else int(
+            re.sub(r"\D", "", storage.next_id(project.get("scenes") or [], "sc")) or 1)
+        locs = gen_locations(project, cfg, opts, chars, first_seq=first_sc)
+        scns = locs["preview"]["scenes"]
+        warn_by["locations"] = locs["warnings"]
+        timings["locations"] = round(time.time() - t, 1)
+        done_steps.append("locations")
+        _land_scenes(project, scns)
+        _save_now(slug, project)
+        written["scenes"] = len(scns)
+        agg["scenes"] = [s["id"] for s in scns]
+        flush_job()
+        _check_cancel(job_id)
+
+        # 3) 劇本（集／場／beats）→ 落地
+        progress("script", "寫劇本（集／場／對白）…")
+        t = time.time()
+        ep_no = 1 + len(((project.get("script") or {}).get("episodes") or []))
+        script = gen_script(project, cfg, opts, chars, scns, episode_no=ep_no)
+        warn_by["script"] = script["warnings"]
+        timings["script"] = round(time.time() - t, 1)
+        done_steps.append("script")
+        sp = dict(script["preview"])
+        ep_out, id_map = _land_script(project, sp)
+        _save_now(slug, project)
+        written["episodeScenes"] = len(ep_out["scenes"])
+        agg["episodes"] = 1
+        agg["episodeId"] = ep_out["id"]
+        flush_job()
+        _check_cancel(job_id)
+
+        # 4) 分鏡：**逐場生成、每場完成立刻落地**
+        progress("shots", "拆分鏡（六段式 prompt）…")
+        t = time.time()
+        # 注意順序：預覽的 sc 裡也有 id（eNNsMM），必須最後覆蓋成實際寫入的場次 id，
+        # 否則鏡頭會引用到不存在的場次（實測 error：鏡頭引用不存在的場次 None）。
+        es_list = [{**sc, "id": ep_out["scenes"][i]["id"]} for i, sc in enumerate(sp.get("scenes") or [])]
+        shot_warns: list[str] = []
+        sp_total = int(opts["shotCount"])
+        if len(es_list) != int(opts["sceneCount"]):
+            sp_total = max(sp_total, len(es_list))
+        alloc, alloc_warns = allocate_shots(sp_total, len(es_list))
+        shot_warns += alloc_warns
+        job_cfg = dict(cfg or {})
+        if job_cfg.get("provider"):
+            job_cfg["providerLabel"] = "線上" if job_cfg["provider"] == "online" else (
+                "自訂" if job_cfg["provider"] == "custom" else "本機")
+        try:
+            st = llm.status(cfg or {})
+            if st.get("ok") and st.get("model"):
+                job_cfg["model"] = st["model"]
+        except Exception:  # noqa: BLE001
+            pass
+        _set(job_id, params={**opts, "shotPlan": alloc,
+                             "provider": job_cfg.get("provider") or "",
+                             "providerLabel": job_cfg.get("providerLabel") or "",
+                             "model": job_cfg.get("model") or ""})
+        n_es = max(1, len(es_list))
+        for k, es in enumerate(es_list):
+            _check_cancel(job_id)
+            # 進度條要在逐場之間真的前進（0.77 → 0.99），否則使用者會以為卡住
+            _set(job_id, step="shots", stepLabel=STEP_LABEL["shots"],
+                 progress=round(0.77 + 0.22 * (k / n_es), 3),
+                 message=f"拆分鏡…（{k + 1}/{n_es} 場）", elapsed=round(time.time() - t_start, 1))
+            beats = [b for b in (es.get("beats") or []) if isinstance(b, dict)]
+            per = alloc[k] if k < len(alloc) else 1
+            for w in shot_budget(beats, opts["shotSeconds"], per, fps)[1]:
+                shot_warns.append(f"{es['id']}：{w}")
+            res = gen_shots_for_scene(project, cfg, chars, scns, es, per,
+                                      opts["shotSeconds"], fps, {})
+            shot_warns += [f"{es['id']}：{w}" for w in res["warnings"]]
+            # gen_shots_for_scene 回傳的鏡頭不帶所屬場次（舊版由 build_preview 統一補），
+            # 逐步落地要在這裡補，否則寫入時找不到場次（實測：鏡頭引用不存在的場次 None）。
+            shots_for_es = [{**sh, "episodeSceneId": es["id"], "sceneId": es.get("sceneId")}
+                            for sh in res["preview"]["shots"]]
+            es["shots"] = shots_for_es
+            ids = _land_shots(project, ep_out, sp, shots_for_es, id_map)
+            _save_now(slug, project)
+            written["shots"] += len(ids)
+            agg["shots"] += ids
+            warn_by["shots"] = list(shot_warns)
+            flush_job()
+        warn_by["shots"] = shot_warns
+        timings["shots"] = round(time.time() - t, 1)
+
+        # 舊 media 檔最後才刪（前面任何一步失敗都還能還原）
+        if old_images:
+            agg["mediaDeleted"] = _delete_media(slug, old_images)
+        flush_job()
+        return {"result": {**{k: written[k] if k != "episodeScenes" else len(ep_out["scenes"])
+                              for k in ("characters", "scenes", "episodeScenes", "shots")},
+                           "episodes": 1, "mediaDeleted": agg["mediaDeleted"],
+                           "ids": {"characters": agg["characters"], "scenes": agg["scenes"],
+                                   "episodeId": agg["episodeId"], "shots": agg["shots"]}},
+                "warnings": [w for k in ("cast", "locations", "script", "shots") for w in (warn_by.get(k) or [])],
+                "warningsByStep": warn_by, "timings": timings}
+    finally:
+        # 無論成敗都把已完成的部分寫回去（避免 job 卡在舊 written）
+        pass
+
+
 def media_paths_of(old: dict) -> list[str]:
     return _media_paths(old)
 
@@ -993,6 +1256,7 @@ def start(slug: str, opts: dict | None = None) -> dict:
             "jobId": job_id, "slug": slug, "status": "queued", "step": "queued", "stepLabel": "排隊中",
             "progress": 0.0, "params": o, "existing": existing_counts(project),
             "warnings": [], "warningsByStep": {}, "timings": {},
+            "written": {"characters": 0, "scenes": 0, "episodeScenes": 0, "shots": 0},
             "result": {"characters": 0, "scenes": 0, "episodes": 0, "shots": 0},
             "error": "", "failedStep": "", "createdAt": storage.now_iso(),
             "startedAt": "", "finishedAt": "", "elapsed": 0.0,
@@ -1026,6 +1290,19 @@ def _set(job_id: str, **kw) -> None:
             job.update(kw)
 
 
+def _written_of(job_id: str) -> dict:
+    with _LOCK:
+        return dict((_JOBS.get(job_id) or {}).get("written") or {})
+
+
+def _kept_note(job_id: str) -> str:
+    """失敗／取消時的「已寫入」說明（逐步落地的重點：前面的成果不會白做）。"""
+    w = _written_of(job_id)
+    bits = [f"{w.get(n)} {label}" for n, label in (("characters", "角色"), ("scenes", "場景"),
+                                                    ("episodeScenes", "場劇本"), ("shots", "鏡頭")) if w.get(n)]
+    return ("\n已保留在專案裡：" + "、".join(bits)) if bits else "\n（這一輪還沒有任何資料寫入）"
+
+
 def _run(job_id: str) -> None:
     with _LOCK:
         job = _JOBS[job_id]
@@ -1041,41 +1318,50 @@ def _run(job_id: str) -> None:
              message=msg, elapsed=round(time.time() - t0, 1))
 
     try:
-        project = storage.load_project(slug)
         cfg = storage.llm_settings(slug)
-
-        # 逐步呼叫：沿用 build_preview 的邏輯但每步完成就更新 progress
-        preview_pack = build_preview_with_progress(project, cfg, opts, progress, done_steps,
-                                                   job_id, t0)
-        preview = preview_pack["preview"]
-        _set(job_id, progress=0.92, step="done", stepLabel="寫入專案",
-             warnings=preview_pack["warnings"], warningsByStep=preview_pack["warningsByStep"],
-             timings=preview_pack["timings"], message="寫入角色／場景／劇本／鏡頭…")
-        result = apply_preview(slug, preview, opts["overwrite"])
+        # 逐步落地：每層生成完就寫檔（失敗時前面的成果保留，模型每次只算一小包）
+        pack = run_steps_landing(job_id, slug, cfg, opts, progress, done_steps)
+        r = pack["result"]
         _set(job_id, status="done", step="done", stepLabel="完成", progress=1.0,
-             result={**{k: result[k] for k in ("characters", "scenes", "episodes", "shots")},
-                     "mediaDeleted": result["mediaDeleted"], "ids": result["ids"]},
-             timings={**preview_pack["timings"], "write": round(time.time() - t0 - sum(preview_pack["timings"].values()), 1)},
-             finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1), message="")
+             result={**{k: r[k] for k in ("characters", "scenes", "episodes", "shots")},
+                     "mediaDeleted": r["mediaDeleted"], "ids": r["ids"]},
+             warnings=pack["warnings"], warningsByStep=pack["warningsByStep"],
+             timings=pack["timings"], finishedAt=storage.now_iso(),
+             elapsed=round(time.time() - t0, 1), message="")
     except DeployError as e:
+        with _LOCK:
+            cur_written = dict(_JOBS[job_id].get("written") or {})
+        w = cur_written or {}
+        kept = ("；已保留在專案裡：" + "、".join(
+            f"{w.get(n)} {label}" for n, label in (("characters", "角色"), ("scenes", "場景"),
+                                                   ("episodeScenes", "場劇本"), ("shots", "鏡頭")) if w.get(n)))
+        if e.step == "cancelled":
+            _set(job_id, status="cancelled", step="cancelled", failedStep="cancelled",
+                 error=str(e) + kept, written=w,
+                 finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
+            return
         _set(job_id, status="failed", step=e.step or "failed", failedStep=e.step,
-             error=str(e), finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
+             error=str(e) + kept, written=w,
+             finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
     except storygen.GenError as e:
         with _LOCK:
             cur = _JOBS[job_id].get("step")
         raw = (e.raw or "")[:400]
         _set(job_id, status="failed", step=cur or "failed", failedStep=cur,
-             error=f"{STEP_LABEL.get(cur, cur)}步驟失敗：{e}" + (f"\n模型原始回覆（前 400 字）：{raw}" if raw else ""),
+             error=f"{STEP_LABEL.get(cur, cur)}步驟失敗：{e}" + (f"\n模型原始回覆（前 400 字）：{raw}" if raw else "")
+                   + _kept_note(job_id), written=_written_of(job_id),
              finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
     except llm.LLMError as e:
         with _LOCK:
             cur = _JOBS[job_id].get("step")
         _set(job_id, status="failed", step=cur or "failed", failedStep=cur,
-             error=f"模型服務錯誤（{STEP_LABEL.get(cur, cur)}步驟）：{e}", finishedAt=storage.now_iso(),
+             error=f"模型服務錯誤（{STEP_LABEL.get(cur, cur)}步驟）：{e}" + _kept_note(job_id),
+             written=_written_of(job_id), finishedAt=storage.now_iso(),
              elapsed=round(time.time() - t0, 1))
     except storage.StorageError as e:
         _set(job_id, status="failed", step="write", failedStep="write",
-             error=f"寫入專案失敗：{e}", finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
+             error=f"寫入專案失敗：{e}" + _kept_note(job_id),
+             written=_written_of(job_id), finishedAt=storage.now_iso(), elapsed=round(time.time() - t0, 1))
     except Exception as e:  # noqa: BLE001 —— 背景 thread 不能靜默死掉
         traceback.print_exc()
         _set(job_id, status="failed", step="failed", failedStep="failed",
@@ -1180,4 +1466,4 @@ def _check_cancel(job_id: str) -> None:
         job = _JOBS.get(job_id)
         cancelled = bool(job and job["_cancel"].is_set())
     if cancelled:
-        raise DeployError("佈署已取消（已完成的步驟不會寫入）", step="", raw="")
+        raise DeployError("使用者取消（已完成的層級會保留在專案裡）", step="cancelled", raw="")

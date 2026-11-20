@@ -5267,7 +5267,13 @@ function dpRenderProgress(job) {
   });
   const pct = Math.round((job.progress || 0) * 100);
   wrap.append(el("div", { class: "dp-bar" }, el("div", { class: "dp-bar-fill", style: `width:${pct}%` })));
-  wrap.append(el("p", { class: "hint", text: `${pct}%　${DP_STEP_LABEL[cur] || cur}${job.elapsed ? `（已用 ${job.elapsed}s）` : ""}` }));
+  const wtxt = (() => {
+    const w = job.written || {};
+    const bits = [w.characters ? `${w.characters} 角色` : "", w.scenes ? `${w.scenes} 場景` : "",
+                  w.episodeScenes ? `${w.episodeScenes} 場劇本` : "", w.shots ? `${w.shots} 鏡` : ""].filter(Boolean);
+    return bits.length ? `　已寫入：${bits.join("、")}` : "";
+  })();
+  wrap.append(el("p", { class: "hint", text: `${pct}%　${DP_STEP_LABEL[cur] || cur}${job.elapsed ? `（已用 ${job.elapsed}s）` : ""}${wtxt}` }));
 }
 
 async function submitDeploy() {
@@ -5348,7 +5354,18 @@ async function pollDeploy(jobId) {
   } else if (j.status === "failed" || j.status === "cancelled") {
     dpDone();
     const stepLabel = DP_STEP_LABEL[j.failedStep] || j.step || "";
-    dpShowError(`${stepLabel}這一步失敗（沒有寫入任何資料）：${j.error || "原因不明"}`);
+    const w = j.written || {};
+    const kept = [w.characters ? `${w.characters} 角色` : "", w.scenes ? `${w.scenes} 場景` : "",
+                  w.episodeScenes ? `${w.episodeScenes} 場劇本` : "", w.shots ? `${w.shots} 鏡` : ""]
+      .filter(Boolean).join("、");
+    const head = j.status === "cancelled" ? "已取消" : `${stepLabel}這一步失敗`;
+    // 逐步落地：前面已完成的層級留在專案裡，不是「白做」
+    dpShowError(`${head}：${j.error || "原因不明"}`
+      + (kept ? `\n已寫入的部分已存進專案（${kept}），可以到各頁直接查看或接續手動編輯。`
+              : "\n這一輪還沒寫入任何資料。"));
+    clearTimeout(state.saveTimer);
+    state.dirty = false;
+    await reloadProject();
   }
 }
 
