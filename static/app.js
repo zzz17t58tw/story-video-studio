@@ -1799,7 +1799,22 @@ function renderScript() {
 // ══════════════════════════════════════════════════════════
 // 鏡頭分頁
 // ══════════════════════════════════════════════════════════
-const SHOT_TYPES = ["特寫", "中景", "全景", "過肩", "POV", "其他"];
+// spec.shotType 的合法值是英文（docs/data-model.md v0.2；後端 storage.shot_type_en 也照這個轉），
+// 顯示翻中文。舊資料若存中文（0.2 之前）用 SHOT_TYPE_ALIAS 轉回來，不要顯示「引用已失效」。
+const SHOT_TYPES = [
+  { value: "close_up", text: "特寫（close_up）" },
+  { value: "medium", text: "中景（medium）" },
+  { value: "wide", text: "全景（wide）" },
+  { value: "over_shoulder", text: "過肩（over_shoulder）" },
+  { value: "pov", text: "POV（pov）" },
+];
+const SHOT_TYPE_ALIAS = {
+  "特寫": "close_up", "中景": "medium", "全景": "wide", "過肩": "over_shoulder", "POV": "pov", "其他": "other",
+};
+function normShotType(v) {
+  const s0 = String(v || "").trim();
+  return SHOT_TYPE_ALIAS[s0] || s0;
+}
 // v0.2：spec.angle = {h, v, s}（見 docs/data-model.md）
 const ANGLE_H = [
   ["front", "正面（front）"], ["front_left", "左前（front_left）"], ["left", "左側（left）"],
@@ -1823,7 +1838,7 @@ function blankShot(no, esId, extra) {
     episodeSceneId: found ? found.es.id : null,
     sceneId: found ? (found.es.sceneId || null) : null,
     characterIds: found && Array.isArray(found.es.characterIds) ? [...found.es.characterIds] : [],
-    spec: { shotType: "中景", angle: "", cameraMove: "", composition: "", lighting: "" },
+    spec: { shotType: "medium", angle: "", cameraMove: "", composition: "", lighting: "" },
     durationSec: 5,
     promptZh: "",
     promptEn: "",
@@ -1882,7 +1897,7 @@ function splitDraftFromScene(esId) {
     no += 1;
     sh.sceneId = es.sceneId || null;
     sh.characterIds = Array.isArray(es.characterIds) ? [...es.characterIds] : [];
-    sh.spec.shotType = isDialogue ? "特寫" : "中景";
+    sh.spec.shotType = isDialogue ? "close_up" : "medium";
     if (isDialogue) {
       sh.dialogue = [{ characterId: b.characterId || null, line: b.line || "" }];
       sh.promptZh = `《${es.title || es.id}》${charNameById(b.characterId)}${b.emotion ? "（" + b.emotion + "）" : ""}說：「${b.line || ""}」`;
@@ -1981,8 +1996,8 @@ function shotCard(sh, idx) {
   const specCard = el("div", { class: "subcard" });
   specCard.append(el("h4", { text: "畫面與運鏡（spec）" }));
   const sg = el("div", { class: "field-grid" });
-  sg.append(pickSelect("鏡頭類型（shotType）", spec.shotType || "中景",
-    SHOT_TYPES.map((t) => ({ value: t, text: t })), (v) => { spec.shotType = v; markDirty(); }));
+  sg.append(pickSelect("鏡頭類型（shotType）", normShotType(spec.shotType) || "medium",
+    SHOT_TYPES, (v) => { spec.shotType = v; markDirty(); }));
   sg.append(angleSelects(sh, spec));
   sg.append(field("運鏡（cameraMove）", spec, "cameraMove", "例如：緩慢推近、手持跟拍", false));
   sg.append(field("構圖（composition）", spec, "composition", "例如：中心構圖、三分法、前景遮擋", false));
@@ -4376,7 +4391,7 @@ const APPLY_FIELDS = {
   shot: [
     ["promptEn", "英文提示（promptEn）"],
     ["promptZh", "中文提示（promptZh）"],
-    ["spec.shotType", "鏡頭類型（spec.shotType，如 特寫／中景／全景／過肩／POV）"],
+    ["spec.shotType", "鏡頭類型（spec.shotType，只能是 close_up／medium／wide／over_shoulder／pov）"],
     ["spec.angle", "角度（spec.angle）"],
     ["spec.cameraMove", "運鏡（spec.cameraMove）"],
     ["spec.composition", "構圖（spec.composition）"],
@@ -5058,7 +5073,7 @@ document.addEventListener("keydown", (e) => {
 });
 // 頁內確認框（M2a）：刪人物/場景前列出引用明細；回傳 Promise<boolean>
 (function svsConfirmModule() {
-  function SVSConfirm({ title, refs }) {
+  function SVSConfirm({ title, refs, okText, plain } = {}) {
     return new Promise((resolve) => {
       const modal = document.getElementById("modal-confirm");
       if (!modal) { resolve(window.confirm(`要刪除「${title}」嗎？`)); return; }
@@ -5066,10 +5081,15 @@ document.addEventListener("keydown", (e) => {
       const body = modal.querySelector(".cf-body");
       const okBtn = modal.querySelector(".cf-ok");
       const cancelBtn = modal.querySelector(".cf-cancel");
-      tl.textContent = `刪除「${title}」`;
+      // plain=true：非刪除用途（例如一鍵佈署的「覆蓋」確認）。refs 當說明條目原樣列出，
+      // 不加「刪除」「目前被 N 處引用」「會清成 null」那套刪除語意。
+      tl.textContent = plain ? title : `刪除「${title}」`;
       body.textContent = "";
+      okBtn.textContent = okText || "仍要刪除";
       const list = refs || [];
-      if (list.length === 0) {
+      if (plain) {
+        list.forEach((r) => body.append(el("p", { class: "cf-warn", text: r })));
+      } else if (list.length === 0) {
         body.append(el("p", { class: "hint", text: "目前沒有任何鏡頭、劇本場次或對白引用它，刪除不會影響其他內容。" }));
       } else {
         body.append(el("p", { class: "cf-warn", text: `目前被 ${list.length} 處引用：` }));
@@ -5258,7 +5278,7 @@ async function submitDeploy() {
     const ex = dpState.existing || {};
     const has = (ex.characters || 0) + (ex.scenes || 0) + (ex.episodes || 0) + (ex.shots || 0) > 0;
     const ok = await (window.SVSConfirm
-      ? SVSConfirm({ title: "覆蓋現有內容？（會先清空再重建）", refs: [
+      ? SVSConfirm({ title: "覆蓋現有內容？（會先清空再重建）", plain: true, okText: "清空並重建", refs: [
         has ? `會永久清空：${ex.characters || 0} 角色、${ex.scenes || 0} 場景、${ex.episodes || 0} 集劇本、${ex.shots || 0} 個鏡頭`
           : "目前沒有舊內容，覆蓋等同直接建立",
         "角色／場景的參考圖、鏡頭的首尾幀與影片檔案也會一併移出（不可復原）",

@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### 修正（模擬使用者走一遍「一鍵佈署」發現）
+
+- **覆蓋確認框用了刪除的文案**：一鍵佈署勾「覆蓋現有內容」送單時，`SVSConfirm` 把標題寫成
+  「刪除「覆蓋現有內容？…」」、內文冠上「目前被 3 處引用：」、按鈕是「仍要刪除」，還補一句
+  「這些引用會清成 null（鏡頭與劇本不會被刪）」——使用者會以為自己在刪資料。`SVSConfirm` 加
+  `plain`／`okText` 選項，佈署改走 plain：標題原樣、條目直接列、按鈕「清空並重建」。
+- **台詞量警告把動作句也算成台詞**：`deploy.shot_budget` 用全部 beats 估算，場次 8 beats（只 3 句台詞）
+  卻警告「8 句共需約 51s 台詞塞不下」，還把鏡頭時長拉長。改為只算 dialogue，
+  措辭改成「N 個演出點（X 句台詞＋Y 個動作）」。實測同題材總時長由 124–158 幀回到 124 幀為主。
+- **完成摘要顯示設定值而非實際模型**：設定寫 `deepseek-chat`（帳號沒有）時後端自動改用
+  `deepseek-flash`，摘要卻仍印 deepseek-chat。改為佈署前用 `llm.status()` 取實際模型寫進 job.params。
+- **場景「禁人語」兩套判定標準**：`deploy` 要求英文 `no people in silhouette / in reflection`，
+  `h3compose.validate_project` 只認中文句 → 一鍵佈署的場景永遠掛 2 筆 warn。校驗改為中英文任一皆可。
+- **鏡頭類型下拉只有中文，資料是英文**：後端（`storage.shot_type_en`／`h3compose`／`imagegen`）全用
+  `close_up|medium|wide|over_shoulder|pov`，前端 `SHOT_TYPES` 仍是中文 → 每張鏡頭卡顯示紅字
+  「（引用已失效：medium）」。前端改成 value/label 對照＋舊中文值 alias，預設值與拆鏡頭草稿同步改英文。
+
+### 驗收（模擬使用者實走一輪，線上 deepseek）
+
+- 新專案 → 設定頁切 online（自動存檔）→ 故事頁填 premise／synopsis → 一鍵佈署（3 角色／2 場景／6 鏡／5 秒／覆蓋）。
+- 第一次 108.3s、第二次（覆蓋重跑）144.5s；四步計時 cast 21–34s、locations 15–16s、script 14–22s、shots 44–85s。
+- 落地結果：3 角色（identityAnchors 6 鍵齊）、2 場景、1 集 2 場（9／11 beats，台詞 3／4）、6 鏡；
+  六段式 100%、`promptEn` 0 中文字、時長落在 124f／209f（17k+5）、`dialogLineRefs` 覆蓋全部台詞、
+  `validate` **0 error**（warn 只剩「沒有參考圖」，屬預期）；七個分頁皆正常渲染、無 JS 錯誤。
+- 截圖：`docs/shots/deploy-walkthrough-shots.png`、`docs/shots/deploy-walkthrough-script.png`。
+
 ### 修正
 
 - **`/api/health` 的版本戳是硬編碼的舊里程碑**（`milestone: "M5b+M6"`，`FastAPI(version=...)` 亦同），

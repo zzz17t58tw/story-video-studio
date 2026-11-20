@@ -583,15 +583,18 @@ def shot_budget(beats: list, shot_seconds: float, shot_count: int, fps: int) -> 
     台詞時長下限沿用 storygen 的算式（字數÷4.5 + 2 秒，單鏡上限 15 秒）；
     真正的時長調整與 coverage 檢查在 gen_shots_for_scene 的 validate 裡逐鏡做。
     """
-    n = max(1, len(beats))
-    per = storygen.estimate_durations(beats)["perBeat"] if beats else []
+    # 台詞量只算 dialogue：action beat 沒有台詞、不佔說話時間。
+    # （曾把兩者一起算，導致「8 句台詞塞不下」的誤報，還把鏡頭時長拉長。）
+    said = [b for b in beats if (b.get("type") or "dialogue") != "action"]
+    per = storygen.estimate_durations(said)["perBeat"] if said else []
     sec = float(shot_seconds)
     warns: list[str] = []
     if per and sec * shot_count + 0.01 < sum(p["sec"] for p in per):
-        warns.append(f"{n} 句共需約 {sum(p['sec'] for p in per):g}s 台詞，"
+        warns.append(f"{len(said)} 句台詞共需約 {sum(p['sec'] for p in per):g}s，"
                      f"但 {shot_count} 鏡 × {sec:g}s = {sec * shot_count:g}s：台詞會塞不下（已在可行範圍內平均分配）")
     if len(beats) > shot_count:
-        warns.append(f"這一場有 {len(beats)} 句、卻只分到 {shot_count} 鏡：部分鏡頭會連續演多句")
+        warns.append(f"這一場有 {len(beats)} 個演出點（{len(said)} 句台詞＋{len(beats) - len(said)} 個動作）、"
+                     f"卻只分到 {shot_count} 鏡：部分鏡頭會連續演多個演出點")
     quota = [1] * len(beats) if beats else []
     for k in range(shot_count - len(quota)):
         if quota:
@@ -1132,6 +1135,14 @@ def build_preview_with_progress(project: dict, cfg: dict, opts: dict, progress, 
     if job_cfg.get("provider"):
         job_cfg["providerLabel"] = "線上" if job_cfg["provider"] == "online" else (
             "自訂" if job_cfg["provider"] == "custom" else "本機")
+    # 摘要要顯示「實際會用的模型」而不是設定值：設定寫 deepseek-chat 時後端會自動改用
+    # 帳號清單裡存在的模型（例如 deepseek-flash），照設定值顯示等於騙人。
+    try:
+        st = llm.status(cfg or {})
+        if st.get("ok") and st.get("model"):
+            job_cfg["model"] = st["model"]
+    except Exception:  # noqa: BLE001 —— 拿不到就退回設定值，不影響佈署
+        pass
     _set(job_id, params={**opts, "shotPlan": alloc,
                          "provider": job_cfg.get("provider") or "", "providerLabel": job_cfg.get("providerLabel") or "",
                          "model": job_cfg.get("model") or ""})

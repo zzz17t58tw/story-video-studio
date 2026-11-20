@@ -511,9 +511,16 @@ def validate_project(data: dict) -> dict:
         for r in (sc.get("refImages") or []):
             if isinstance(r, dict):
                 blob += " " + _s(r.get("promptEn"))
-        if SCENE_NO_HUMAN not in blob:
+        # 兩種寫法都算數：中文句（人工／舊資料）或 deploy 產的英文句
+        # 「no people in silhouette / in reflection」。只認中文會讓一鍵佈署的場景永久掛 warn。
+        low = blob.lower()
+        has_clause = SCENE_NO_HUMAN in blob or (
+            ("no people" in low or "no person" in low or "no humans" in low or "empty" in low)
+            and "silhouette" in low and "reflection" in low)
+        if not has_clause:
             issues.append(_issue("warn", "scene", sc.get("id"),
-                                 f"場景 prompt 缺「{SCENE_NO_HUMAN}」這句（空景參考圖要明寫，免得生出路人）",
+                                 f"場景 prompt 缺「{SCENE_NO_HUMAN}」（或英文 no people in silhouette / in reflection）"
+                                 "這句空景禁人語，免得生出路人",
                                  sc.get("name") or sc.get("id")))
 
     # 人物錨點／角色存在性
