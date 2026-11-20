@@ -50,7 +50,7 @@ files: ["app/version.py", "app/server.py", "app/gpu.py", "app/llm.py", "app/depl
 
 ## 未完成／已知限制
 
-1. **exe 還是舊的**：`dist/StoryVideoStudio/` 沒有重新打包，所有修正只在原始碼。要發版跑 `python tools/release.py`（固定 `--distpath build/release-work`，不碰使用端 projects）。**發版前先確認使用者沒開著程式。**
+1. ~~exe 還是舊的~~ **已完成（2026-11-20 10:35）**：`VERSION` 0.9.2、`python tools/release.py` 重打包，`dist/StoryVideoStudio/StoryVideoStudio.exe`（8,996,300B，舊版備份為 `.bak-0.9.2`）已含全部 M11 修正；乾淨版 `release/StoryVideoStudio-v0.9.2-乾淨版.zip`（128.5MB）與 `docs/RELEASE-NOTES-v0.9.2.md` 已產出。實跑驗證：exe 自主啟動後 `/api/health` 回 `version 0.9.2`、`frozen: true`、11 專案、`/app.js` 含「已寫入：」等新字串。
 2. **本地模型品質落差**（可接受但要主動說明）：會幻覺故事沒有的角色（實測多出「阿公」）；**場景數屢次少給**（3 次裡 2 次只給 1/2，只警告不重試，因 prompt 明令「不要為湊數加無關場景」）；分鏡較常漏引台詞或重複引用（後端自動補齊＋提醒）。線上模型沒有這些問題。
 3. **逐步落地的副作用**：分鏡中途失敗／取消時，已寫入場次有鏡頭、其餘沒有 → `validate` 會正確回報「台詞沒有覆蓋」。這是半套資料的正常結果，**不要改校驗規則去消音**。
 4. `validate` 的「沒有參考圖」警告會隨鏡數重複（17–26 筆裡 6 筆同因），尚未去重。
