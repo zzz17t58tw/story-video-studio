@@ -5101,6 +5101,8 @@ document.addEventListener("keydown", (e) => {
       }
       const done = (v) => {
         modal.classList.add("hidden");
+        modal.style.zIndex = "";           // 還原動態抬升的層級
+        window.__svsConfirmOpen = false;
         okBtn.removeEventListener("click", onOk);
         cancelBtn.removeEventListener("click", onCancel);
         document.removeEventListener("keydown", onKey);
@@ -5112,6 +5114,14 @@ document.addEventListener("keydown", (e) => {
       okBtn.addEventListener("click", onOk);
       cancelBtn.addEventListener("click", onCancel);
       document.addEventListener("keydown", onKey);
+      // 疊層：確認框必須壓在「目前開著的任何彈窗」之上。
+      // #modal-deploy／#modal-gen 是執行時才 append 到 body，DOM 順序在 #modal-confirm 之後，
+      // 若只靠 CSS 同一個 z-index，確認框會被蓋住 → 使用者點不到「繼續」，只看到底下的彈窗。
+      const others = [...document.querySelectorAll(".modal")]
+        .filter((m) => m !== modal && !m.classList.contains("hidden"));
+      const topZ = others.reduce((mx, m) => Math.max(mx, Number(getComputedStyle(m).zIndex) || 50), 50);
+      modal.style.zIndex = String(topZ + 10);
+      window.__svsConfirmOpen = true;
       modal.classList.remove("hidden");
       cancelBtn.focus();
     });
@@ -5123,7 +5133,7 @@ document.addEventListener("keydown", (e) => {
 // 一鍵佈署：故事 → 角色／場景／劇本／鏡頭（只建文字，圖片全空）
 // 流程：彈窗填參數 → POST /deploy 建背景 job → 每 2 秒 poll → 完成摘要
 // ══════════════════════════════════════════════════════════
-const dpState = { jobId: null, timer: null, pending: false, existing: null, latest: null };
+const dpState = { jobId: null, timer: null, pending: false, confirming: false, existing: null, latest: null };
 
 const DP_STEPS = [
   ["cast", "角色卡"], ["locations", "場景卡"], ["script", "劇本"], ["shots", "分鏡"],
@@ -5151,7 +5161,10 @@ function ensureDeployModal() {
   document.body.append(box);
   box.querySelector(".dp-close").addEventListener("click", closeDeployModal);
   box.querySelector(".dp-run").addEventListener("click", submitDeploy);
-  box.addEventListener("click", (e) => { if (e.target.id === "modal-deploy" && !dpState.pending) closeDeployModal(); });
+  box.addEventListener("click", (e) => {
+    // 確認框開著時不要讓「點背景關閉」生效，否則使用者會以為參數窗被確認框吃掉
+    if (e.target.id === "modal-deploy" && !dpState.pending && !window.__svsConfirmOpen) closeDeployModal();
+  });
 }
 
 // 彈窗上方那一行小字：建議用線上模型＋目前 provider
@@ -5204,6 +5217,7 @@ async function openDeployModal() {
     dryRun: false,
   });
   dpState.pending = false;
+  dpState.confirming = false;
   box.querySelector(".dp-run").disabled = false;
   box.querySelector(".dp-run").textContent = "開始佈署";
   box.querySelector(".dp-close").disabled = false;
@@ -5281,6 +5295,8 @@ async function submitDeploy() {
   const box = $("#modal-deploy");
   const body = dpState.readParams();
   if (body.overwrite) {
+    if (dpState.confirming) return;   // 連按兩下不要開出兩個確認框
+    dpState.confirming = true;
     const ex = dpState.existing || {};
     const has = (ex.characters || 0) + (ex.scenes || 0) + (ex.episodes || 0) + (ex.shots || 0) > 0;
     const ok = await (window.SVSConfirm
@@ -5291,7 +5307,8 @@ async function submitDeploy() {
         "不想清空的話按「取消」，再取消勾選「覆蓋現有內容」改成接續新增",
       ] })
       : Promise.resolve(confirm("會清空角色／場景／劇本／鏡頭（含已生成的圖片與影片）後重建，確定嗎？")));
-    if (!ok) return;
+    dpState.confirming = false;
+    if (!ok) return;   // 取消：留在參數視窗，讓使用者改設定再送
   }
   dpState.pending = true;
   box.querySelector(".dp-error").classList.add("hidden");
@@ -5384,7 +5401,7 @@ function dpShowSummary(job) {
   const t = job.timings || {};
   const timeBits = DP_STEPS.map(([k, l]) => `${l} ${t[k] != null ? t[k] + "s" : "—"}`).join("　");
   const plan = (job.params && job.params.shotPlan) || [];
-  wrap.append(el("p", { class: "hint", text: `各步耗時：${timeBits}　總計 ${job.elapsed}s`
+  wrap.append(el("p", { class: "hint", text: `各步耗時：${timeBits}　總計 ${job.elapsed != null ? job.elapsed + "s" : "—"}`
     + (plan.length ? `　（總鏡數分配到各場：${plan.join(" / ")} 鏡）` : "") }));
   const prov = job.params && job.params.provider
     ? `　模型：${job.params.provider}（${job.params.providerLabel || ""}）${job.params.model ? "／" + job.params.model : ""}` : "";

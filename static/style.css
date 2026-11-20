@@ -183,6 +183,10 @@ input.mono, .json-preview { font-family: var(--mono); }
 .lb-close:hover { border-color: var(--err); color: var(--err); }
 
 /* M2a：刪除確認對話框 */
+/* 確認框可能由「另一個開著的彈窗」觸發（如佈署彈窗按開始），那些彈窗是動態 append 到 body、
+   DOM 順序在 #modal-confirm 之後；z-index 若同為 50 會被蓋住、按鈕點不到。
+   這裡先給一個高於一般彈窗的預設值，SVSConfirm 開啟時再動態抬到「所有可見彈窗之上」。 */
+#modal-confirm { z-index: 70; }
 #modal-confirm .modal-box { width: 560px; }
 .cf-warn { color: var(--warn); font-size: 13px; margin: 0 0 8px; }
 .cf-list { margin: 0 0 10px; padding-left: 20px; max-height: 220px; overflow-y: auto; font-size: 12px; line-height: 1.7; }
