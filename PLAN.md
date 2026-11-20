@@ -13,34 +13,36 @@
 - 最終可直接匯出 `.mmxpack.zip` 給導演台匯入
 - 或由程式直接送 ComfyUI API 全自動
 
-## 目前狀態總覽（2026-11-19 11:40 更新）
+## 目前狀態總覽（2026-11-20 10:30 更新）
 
-**版本**：`VERSION 0.9.0`（已推 GitHub `zzz17t58tw/story-video-studio`，Release v0.9.0）
+**版本**：`VERSION 0.9.1`（原始碼在 main；`dist/` 的 exe 仍是 0.9.1 發佈版，**本輪 M11 的修正尚未重新打包**。GitHub `zzz17t58tw/story-video-studio`，Release v0.9.1）
 
 **北極星已達成**：整條鏈路真的跑過一次完整成片——故事 → 一鍵佈署（角色/場景/劇本/分鏡）→ MOSS 生圖 → H3 生影片 → ffmpeg 合併，產出《雨夜的便利商店》31.08 秒成片（768×1344、h264+aac、音視差 20.7ms）。
 
 | 層 | 現況 | 入口 |
 |---|---|---|
 | 故事 | 概念/大綱/章回，可擴寫、可對話改寫 | 故事頁「✦ 擴寫大綱」「🚀 一鍵佈署」 |
+| 一鍵佈署 | **逐步落地（M11）**：角色／場景／劇本各自寫檔、每場鏡頭各自寫檔；失敗或取消保留已完成部分；支援本機與線上模型 | 故事頁「🚀 一鍵佈署到各頁面」 |
 | 人物 | 外型六欄＋辨識特徵＋身分錨點（Hex）＋服裝＋身世＋聲音參照＋參考圖鎖臉＋分階段造型 | 人物頁 |
-| 場景 | 描述/光線/氣氛/英文 prompt（自帶「畫面內不得有人」） | 場景頁 |
+| 場景 | 描述/光線/氣氛/英文 prompt（自帶「畫面內不得有人」，中英兩種寫法都認） | 場景頁 |
 | 劇本 | 集 → 場次 → 對白/動作，人物與場景下拉連動 | 劇本頁 |
-| 分鏡 | 鏡頭類型/角度三元組/運鏡/時長/六段式 prompt/台詞覆蓋/首尾幀 | 鏡頭頁「檢查全專案」 |
+| 分鏡 | 鏡頭類型（英文枚舉＋中文標籤）/角度三元組/運鏡/時長/六段式 prompt/台詞覆蓋/首尾幀 | 鏡頭頁「檢查全專案」 |
 | 生圖 | Qwen 2.1（i2i 鎖臉，參考圖可到 4 張）＋ MOSS（t2i，靠文字錨點） | 鏡頭頁「⚡ 生圖」、人物頁「生成立繪」 |
 | 生影片 | H3 導演台 r2v，原生音軌，可掛 LoRA（Pika） | 鏡頭頁「🎬 生影片」、批次 |
 | 合併 | ffmpeg，自動判斷需不需要重編碼（H3 音訊是 aac 32k） | 「生成與合併」頁 |
 | 桌面 | pywebview 原生視窗 exe，關窗即完全退出 | `dist/StoryVideoStudio/StoryVideoStudio.exe` |
 | 發佈 | `python tools/release.py` 一鍵（固定 `--distpath build/release-work`，不碰使用端 projects） | `docs/VERSIONING.md` |
-| 協作 | 分支規矩＋交接單工具（P1） | `docs/BRANCH-WORKFLOW.md`、`tools/handoff.py` |
+| 協作 | 分支規矩＋交接單工具（P1）；M11 交接單已建 | `docs/BRANCH-WORKFLOW.md`、`tools/handoff.py`、`docs/handoff/main-deploy-incremental.md` |
 
-**資料現況**：`projects/` 11 個專案（含成果專案 `project-20261118-022129` 雨夜便利商店）。
+**資料現況**：`projects/` 13 個專案（含成果專案 `project-20261118-022129` 雨夜便利商店、本輪驗收用的 `project-20261120-091108` 線上版與 `project-20261120-093033` 本地版）。
 
 **已知未完成（依優先序）**
-1. `app/server.py`（1387 行）、`static/app.js`（5383 行）未拆檔 → 多分支並行必撞（backlog 已記）
-2. `.mmxpack.zip` 匯出給 AIMixer 導演台手動匯入（目前走直接 API，還沒做匯出包）
-3. 角色聲音參照尚未接進 H3 的 `<Audio J>` 槽位（現在只有 H3 原生音訊）
-4. 「雨夜便利商店」大綱結尾斷句、「一鍵佈署」的 5 個殘留畫面缺陷（sh02 櫃台位置等）
-5. C2（協作腳手架）尚未 commit — main 有 6 個未提交變更，會讓 `handoff.py` 的 git 對帳失準
+1. `.mmxpack.zip` 匯出給 AIMixer 導演台手動匯入（目前走直接 API，還沒做匯出包）
+2. 角色聲音參照尚未接進 H3 的 `<Audio J>` 槽位（現在只有 H3 原生音訊）
+3. **M11 的修正還沒進 exe**：發版前要跑 `tools/release.py`（使用者可能開著程式，先確認）
+4. `app/server.py`（1394 行）、`static/app.js`（約 5400 行）未拆檔 → 多分支並行必撞（backlog 已記）
+5. 本地模型的品質落差：場景數偶爾少給（只警告）、角色偶有幻覺（backlog 有記錄，暫不強制）
+6. 「雨夜便利商店」大綱結尾斷句、「一鍵佈署」的 5 個殘留畫面缺陷（sh02 櫃台位置等）
 
 ## MVP 驗收標準（v0.1，不准擴張）
 
@@ -61,6 +63,7 @@
 - M7 打包與打磨：啟動器、設定頁、匯出/匯入專案
 - M10 修正批次（每個 bug 一個分支切片，編號 M10a、M10b…）：目前追蹤中的 bug 見 `docs/TODO-backlog.md`
   - M10a 燈箱關閉鈕失效（`bindLightboxEvents` 在 `#lightbox` 存在前就執行，事件從未綁上）
+- M11 佈署品質與健壯性（2026-11-20，直接 commit 在 main）：版本戳單一真相、狀態探測快取、一鍵佈署實走除錯（線上＋本地）、**一鍵佈署改成逐步落地**（每完成一層就寫檔）。交接單：`docs/handoff/main-deploy-incremental.md`
 
 ## 技術選型（固定，子代理不得自行更換）
 
@@ -150,3 +153,4 @@
 | 2026-11-19 11:25 | P1 分支協作規矩＋交接單工具 | ✅ 完成 | 新增 `docs/BRANCH-WORKFLOW.md`（檔案歸屬表、🔴高衝突檔規則、開分支五句模板、合併檢查清單）、`docs/handoff/_TEMPLATE.md`、`tools/handoff.py`（new/list/check/brief）。實測：new 正確帶入分支名/里程碑/時間；未填模板 check 抓出 3 個問題並 exit 1；填滿後全綠 exit 0；git 對帳正確抓出「交接單列了但實際沒改」；測試檔已清理，list 歸零 |
 | 2026-11-19 12:05 | M10a 燈箱關閉鈕失效 | ✅ 已合併（分支示範） | worktree `1117-wt-m10a` / `feat/m10a-lightbox-close`。根因：`bindLightboxEvents` 是 IIFE，執行時 `#lightbox`（index.html 第 114 行）尚未解析（script 在第 99 行）→ 事件從未綁上。修法：改 document 層 click/keydown 委派＋`lightboxEl` 加 `isConnected` 快取。主代理在 8788 親驗：點縮圖開、X／Esc／點背景三種都關得掉。合併閘：`handoff.py check` 格式✅＋git 對帳相符 2 檔；順手修掉工具兩個誤報（HTML 標籤被當佔位符、交接單本身被算成沒列的變更） |
 | 2026-11-19 11:40 | P2 狀態總覽全面更新 | ✅ 完成 | PLAN 新增「目前狀態總覽」（版本 v0.9.0／北極星達成／11 層現況表／5 項已知未完成）；防偏線加第 8、9 條（子代理一律 worktree 隔離；每輪開工前三檢查）。TODO-backlog 標記已修項。⚠仍未解：main 有 6 個未提交變更，`handoff.py` git 對帳會失準，待使用者在基線 commit 上裁示 |
+| 2026-11-20 10:30 | M11 整理除錯＋一鍵佈署實走＋逐步落地 | ✅ 完成（直接 commit main，四筆） | ① health 版本戳改讀 VERSION（原本硬編碼 M5b+M6）；gpu/llm 狀態加唯讀探測快取 2100ms→2–9ms。② 模擬使用者走線上佈署，修 5 個 bug（覆蓋確認框用刪除文案、台詞量含 action、摘要顯示設定模型、禁人語兩套判定、鏡頭類型下拉中文 vs 資料英文）。③ 本地 27B 三輪實測：思考關 76.8s／100.9s 完成、思考開 492.5s（cast 單步 216.6s），推翻舊「6 次 4 次失敗」。④ **逐步落地**：`run_steps_landing()` 每層（含每場 shots）完成即寫檔、job 加 `written`、取消改 `cancelled` 並列出保留內容、覆蓋清空延後到 cast 成功後。實測本地 91.1s／UI 110.4s／線上 129.5s 全成功；取消情境保留 3 角色 2 場景 2 場 3 鏡；三專案 validate 0 error。交接單 `docs/handoff/main-deploy-incremental.md` |
