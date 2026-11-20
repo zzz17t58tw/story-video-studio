@@ -34,7 +34,7 @@
 | 發佈 | `python tools/release.py` 一鍵（固定 `--distpath build/release-work`，不碰使用端 projects） | `docs/VERSIONING.md` |
 | 協作 | 分支規矩＋交接單工具（P1）；M11 交接單已建 | `docs/BRANCH-WORKFLOW.md`、`tools/handoff.py`、`docs/handoff/main-deploy-incremental.md` |
 
-**資料現況**：`projects/` 13 個專案（含成果專案 `project-20261118-022129` 雨夜便利商店、本輪驗收用的 `project-20261120-091108` 線上版與 `project-20261120-093033` 本地版）。
+**資料現況**：`projects/` 12 個專案（另 `projects/_trash` 有 5 個回收專案）（含成果專案 `project-20261118-022129` 雨夜便利商店、本輪驗收用的 `project-20261120-091108` 線上版與 `project-20261120-093033` 本地版）。
 
 **已知未完成（依優先序）**
 1. `.mmxpack.zip` 匯出給 AIMixer 導演台手動匯入（目前走直接 API，還沒做匯出包）
