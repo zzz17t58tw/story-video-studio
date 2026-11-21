@@ -139,7 +139,9 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
   "composition": "", "lighting": "", "framingRule": "has_person→medium|mcu|cu（禁 wide）"
 },
 "beats": [ { "start": 0.0, "end": 5.0, "cut": false, "action": "", "camera": "", "locationId": "" } ],
-"dialogLineRefs": [ 3, 4 ],         // 覆蓋所屬場次 dialogue 的第幾句（1-based），取代複製字串
+"dialogBeatIds": [ "b02", "b04" ],   // **主鍵**：本鏡演出哪幾句台詞，存所屬場次的 beat id（劇本插/刪/搬句不會錯位）
+"dialogLineRefs": [ 1, 3 ],          // 衍生值：由 dialogBeatIds 換算的「第幾句 dialogue」（1-based，舊資料相容欄位）
+"dialogue": [ { "characterId": "c01", "line": "" } ],  // 本鏡臨時對白，不寫進劇本（舊欄位，保留但非主線）
 "stageIds": [ "c01:s2" ],           // 本鏡要用角色的哪個 stage 參考圖
 "sourceChapterId": "ch01",
 "referencePlan": {                  // 送 H3 的參考圖槽位計畫（最多 9 張），由程式產生、模型不得自己寫
@@ -153,7 +155,7 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ## 機械校驗（送生成前必跑，零 API 成本）
 
-1. `dialogLineRefs` 覆蓋所屬場次全部 dialogue，無漏、無重複。
+1. `dialogBeatIds` 覆蓋所屬場次全部 dialogue（每個 dialogue beat 剛好被一鏡引用），無漏、無重複；`dialogLineRefs` 由它換算，兩者不一致時以 `dialogBeatIds` 為準並自動重算。
 2. `promptEn` 內的 `<Picture N>` 必須與 `referencePlan.slots` 的 ordinal 一一對應且順序一致。
 3. `durationSec` 換算的影格數落在 H3 合法格（17k+5 附近；`total_frames` 需 17k+1 對齊，見 contracts §3）。
 4. 含人物的鏡頭不得為 wide（MSB framing rule）。
