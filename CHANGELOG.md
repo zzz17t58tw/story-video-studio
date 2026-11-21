@@ -8,6 +8,22 @@
 
 （尚無未發佈變更）
 
+## [0.9.7] - 2026-11-21
+
+### 新增：Agent 對接層——外部 AI 的代理人能掌握這支程式的每一個細節
+
+**為什麼**：使用者要求「如果有使用者接入 AI，對方的代理人就能掌握這支程式的每一個細節」。實際痛點是：這支程式有 59 支 API、三層資料模型、一堆硬限制（H3 影格網格、取景規則、單張 GPU），外部 AI 只能靠猜，猜錯就寫壞資料或白花生成時間。
+
+- **`GET /api/agent/manifest`**：機器可讀的完整說明。端點清單、參數 schema **直接從 FastAPI 的 OpenAPI 產生**（不會與程式漂移），再補上人工語意：每支端點的「用途／何時用／副作用」。另含 8 條硬限制、資料模型骨架、V1–V5 驗證規則、6 個常見配方、8 條禁止事項。
+- **`GET /api/agent/guide`**：一份約 1.6 萬字元的 Markdown 操作手冊（可直接塞進 context）：連線資訊、操作順序、硬限制表、驗證規則表、配方步驟、禁止事項、全部 API 索引、背景任務輪詢方式、錯誤碼語意。
+- **`GET /api/agent/coverage`** 與 **`tools/check_agent_doc.py`**：文件完整度自檢。**新增 API 卻忘了寫說明，檢查會失敗**（目前 59/59 全數有說明）。
+- **`AGENTS.md`**（repo 根目錄）：入口檔，告訴任何 AI 先讀哪三個端點、三條必踩的硬限制、寫資料的唯一正確方式、文件地圖與行為準則。
+- 單一真相：`app/agentdoc.py` 集中 `ROUTE_NOTES`／`HARD_LIMITS`／`DATA_MODEL`／`VALIDATION_RULES`／`RECIPES`／`FORBIDDEN`。
+
+實測（8790，複本）：模擬「外部 AI 只讀 manifest 就操作」——找到分鏡重建端點 → 重建 18 鏡（104.38 秒）→ `validate` 0 error → 讀分鏡表 → coverage 59/59。`GET /api/agent/guide` 回 `content-type: text/markdown`、16443 bytes。
+
+
+
 ## [0.9.6] - 2026-11-21
 
 ### 新增：分鏡層（M14a）——把「故事」接回「鏡頭」
