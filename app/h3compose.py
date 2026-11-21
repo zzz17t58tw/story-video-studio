@@ -256,12 +256,17 @@ def _stage_line(data: dict, ch: dict, stid: str) -> str:
     return ", ".join(bits)
 
 
-def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
+def compile_prompt(data: dict, shot: dict,
+                   first_frame_as_picture: bool = False) -> tuple[str, list[str], dict]:
     """確定性模板編譯（不呼模型）。回 (promptEn, warnings, meta)。
 
     六段式：1 subject_definitions / 2 summary(動作) / 3 retention_analysis(鏡頭語言)
             4 detailed_description(光影/構圖) / 5 overall_soundscape(氛圍與現場聲) / 6 non_diegetic_music(音訊/台詞)
     圖片引用一律 `<Picture N>`，N 取自 referencePlan.slots 的 ordinal。
+
+    first_frame_as_picture：這鏡沒有任何角色參考圖、但送件時把首幀當 <Picture 1>（見
+    h3gen.collect_refs 的 firstFrameAsPicture）。以前這裡不寫 <Picture 1>，導致編譯稿
+    與實際送出的圖對不上（H3 只把首幀當氛圍、不鎖主體），現在由呼叫端明確告知。
     """
     warnings: list[str] = []
     ctx = find_scene_ctx(data, shot)
@@ -273,6 +278,12 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
 
     # ① 主體定義
     subject_bits = []
+    if first_frame_as_picture and not refs:
+        # 首幀就是這鏡唯一的圖 → 明講「臉與身體以 <Picture 1> 為準」，
+        # 否則模型只會把它當參考氛圍，換臉換衣服。
+        subject_bits.append(
+            "<Picture 1> is the main subject, taken from this shot's first frame: "
+            "keep the same facial identity, hairstyle, body build and clothing as <Picture 1>.")
     char_ids = [c for c in (shot.get("characterIds") or []) if _s(c)]
     for cid in char_ids:
         ch = next((c for c in (data.get("characters") or []) if c.get("id") == cid), None)
@@ -306,7 +317,11 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
         subject_bits.append(f"{stag} is the location: {sc_desc}"
                             + (f" ({_s(sc.get('timeOfDay'))})" if _s((sc or {}).get("timeOfDay")) else ""))
     if not refs:
-        warnings.append("這鏡沒有參考圖槽位（<Picture N> 無從對應）；建議先按「建參考圖槽位」或補上傳參考圖")
+        if first_frame_as_picture:
+            warnings.append("這鏡沒有角色／場景參考圖槽位；本次用本鏡首幀當 <Picture 1>"
+                            "（要鎖同一個人的臉，請先在人物頁生成立繪再按「建參考圖槽位」）")
+        else:
+            warnings.append("這鏡沒有參考圖槽位（<Picture N> 無從對應）；建議先按「建參考圖槽位」或補上傳參考圖")
     else:
         warnings.append(f"已編譯者請確認 slots 順序：{'、'.join(f'#%s %s' % (s['ordinal'], s['id']) for s in refs)}")
 

@@ -2454,7 +2454,13 @@ function videoGenCard(sh) {
   // 進階參數（預設收合）。M9：預設值跟隨 settings.video（Pika 官方建議），可在這裡單鏡覆寫。
   const vsNow = (state.project && state.project.settings && state.project.settings.video) || {};
   const vsLora = vsNow.lora && typeof vsNow.lora === "object" ? vsNow.lora : (VIDEO_GEN_DEFAULTS.lora || {});
-  const params = Object.assign({ width: 768, height: 1344, frames: 124,
+  // H3 合法影格是 17k+5；影格跟隨「本鏡長度」，不要一律 124（5.17 秒）。
+  // 之前寫死 124，9.42 秒的鏡也只生 5.17 秒，台詞一定唸不完。
+  const FPS = Number((state.project && state.project.meta && state.project.meta.fps) || 24) || 24;
+  const legalFrames = (n) => 17 * Math.max(0, Math.round((Number(n) - 5) / 17)) + 5;
+  const shotSec = Number(sh.durationSec) || 0;
+  const shotFrames = shotSec > 0 ? legalFrames(Math.round(shotSec * FPS)) : 124;
+  const params = Object.assign({ width: 768, height: 1344, frames: shotFrames,
     steps: vsNow.steps ?? VIDEO_GEN_DEFAULTS.steps, cfg: vsNow.cfg ?? VIDEO_GEN_DEFAULTS.cfg,
     shiftVideo: vsNow.shiftVideo ?? VIDEO_GEN_DEFAULTS.shiftVideo,
     shiftAudio: vsNow.shiftAudio ?? VIDEO_GEN_DEFAULTS.shiftAudio,
@@ -2469,9 +2475,24 @@ function videoGenCard(sh) {
     });
     return el("label", { class: "field" }, el("span", { text: label }), inp);
   };
+  // 影格輸入：直接在旁邊顯示「= 幾秒」與本鏡設定，避免 9.42 秒的鏡被默默生 5.17 秒
+  const frameHint = el("span", { class: "hint" });
+  const frameInp = el("input", { type: "number", min: "5", max: "1000", step: "1" });
+  frameInp.value = params.frames === "" ? "" : String(params.frames);
+  const refreshFrameHint = () => {
+    const f = Number(params.frames);
+    if (!(f > 0)) { frameHint.textContent = ""; return; }
+    const sec = (f / FPS).toFixed(2);
+    frameHint.textContent = `（${sec} 秒${shotSec > 0 ? `；本鏡設定 ${shotSec} 秒` : ""}）`;
+  };
+  frameInp.addEventListener("input", () => {
+    params.frames = frameInp.value.trim() === "" ? "" : Number(frameInp.value);
+    refreshFrameHint();
+  });
+  refreshFrameHint();
   adv.append(mk("寬度 width", "width", { min: "32", max: "8192", step: "32" }),
     mk("高度 height", "height", { min: "32", max: "8192", step: "32" }),
-    mk("影格 frames（17k+5）", "frames", { min: "5", max: "1000", step: "1" }),
+    el("label", { class: "field" }, el("span", { text: "影格 frames（17k+5）" }), frameInp, frameHint),
     mk("步數 steps", "steps", { min: "1", max: "60", step: "1" }),
     mk("CFG", "cfg", { min: "0", max: "30", step: "0.1" }),
     mk("shift video", "shiftVideo", { min: "0.01", max: "100", step: "0.5" }),
@@ -2492,7 +2513,7 @@ function videoGenCard(sh) {
   loraStrength.addEventListener("input", pullLora);
   adv.append(el("label", { class: "field" }, el("span", { text: "LoRA（單鏡覆寫）" }), loraSel), loraCustom,
     el("label", { class: "field" }, el("span", { text: "LoRA strength" }), loraStrength));
-  adv.append(el("p", { class: "hint", text: "預設 768×1344（9:16）＋124 影格 ≈ 5.2 秒。LoRA 寫進導演台 timeline 每段的 loras 欄位；空字串＝這一鏡不掛。影格數會自動吸附到 17k+5。" }));
+  adv.append(el("p", { class: "hint", text: "預設 768×1344（9:16）；影格數跟隨本鏡的「長度秒數」（會自動吸附到 17k+5）。LoRA 寫進導演台 timeline 每段的 loras 欄位；空字串＝這一鏡不掛。" }));
 
   const playBox = el("div", { class: "vg-player" });
   const renderVideo = () => {
@@ -2637,9 +2658,20 @@ function videoGenCard(sh) {
       const pv = await api(`/api/projects/${state.slug}/shots/${sh.id}/prompt-preview?engine=h3_video`);
       willCompile = pv.promptSource === "compiled";
       if (willCompile) {
-        const why = (pv.problems || []).map((t) => `· ${t}`).join("\n");
-        if (!confirm(`這一鏡的 promptEn 未符合 H3 官方規則（六段式＋<Picture N>）：\n${why}\n\n`
-          + "按下去會自動改用「模板編譯」的提示詞送出（不會改動你的 project.json）。\n要繼續生影片嗎？")) return;
+        const lines = (pv.problems || []).map((t) => `· ${t}`).filter(Boolean);
+        const okToGen = await (window.SVSConfirm
+          ? SVSConfirm({
+              title: "提示詞格式不符，要自動改寫嗎？",
+              plain: true,
+              okText: "自動改寫並生成",
+              refs: [
+                ...lines,
+                "按下去會用 H3 官方六段式重新組稿再送出（不會改動你的 project.json）。",
+              ],
+            })
+          : Promise.resolve(confirm(`這一鏡的 promptEn 未符合 H3 官方規則（六段式＋<Picture N>）：\n${lines.join("\n")}\n\n`
+              + "按下去會自動改用「模板編譯」的提示詞送出（不會改動你的 project.json）。\n要繼續生影片嗎？")));
+        if (!okToGen) return;
       }
     } catch (_) { /* 預覽失敗不擋送件：送件口本身仍會硬驗 */ }
     pullLora();
@@ -2672,16 +2704,31 @@ function videoGenCard(sh) {
     ppBtn,
     el("span", { class: "spacer" }), status, advBtn, genBtn));
   // M12b：promptEn 不符規則的事前提醒（純讀預覽，不碰 GPU）
-  const preWarn = el("p", { class: "hint warn-text pp-pre-warn hidden" });
+  // 分成「已經幫你處理好的」與「真的需要你動手的」兩類——以前全部塞成一條 ⚠，
+  // 使用者會以為程式壞了（實測 6 條互相矛盾的警告就是這樣來的）。
+  const preWarn = el("div", { class: "hint pp-pre-warn hidden" });
   box.append(preWarn, pp.box, adv, bar, errBox, body, playBox);
   (async () => {
     try {
       const pv = await api(`/api/projects/${state.slug}/shots/${sh.id}/prompt-preview?engine=h3_video`);
-      if (pv.promptSource === "compiled" && pv.prompt) {
-        preWarn.classList.remove("hidden");
-        preWarn.textContent = `⚠ promptEn 未符合 H3 官方規則（${(pv.problems || []).length} 項）→ `
-          + "按「生影片」會自動改用模板編譯的提示詞送出（不會改動 project.json）。";
+      if (pv.promptSource !== "compiled" || !pv.prompt) return;
+      const nProb = (pv.problems || []).length;
+      preWarn.classList.remove("hidden");
+      preWarn.textContent = "";
+      preWarn.append(el("p", { class: "hint ok-text", text:
+        `✓ 已依 H3 官方六段式自動改寫提示詞（原 promptEn 不符格式 ${nProb} 項；不會改動你的資料）`
+        + " — 可以直接按「生影片」。" }));
+      // 「真的要你動手」的才列，而且每種只說一次（以前把後端原文全貼上，
+      // 兩條意思一樣的建議會連著出現，看起來像一堆錯誤）。
+      const ws = pv.warnings || [];
+      if (ws.some((t) => t.includes("參考圖槽位"))) {
+        preWarn.append(el("p", { class: "hint warn-text", text:
+          "⚠ 這鏡沒有角色／場景參考圖，本次用「首幀」當 <Picture 1>；要鎖同一張臉，"
+          + "請先在人物頁按「生成立繪」→ 回鏡頭頁按「建參考圖槽位」。" }));
       }
+      const lineTodo = ws.find((t) => t.includes("未覆蓋所屬場次"));
+      if (lineTodo) preWarn.append(el("p", { class: "hint warn-text", text: "⚠ " + lineTodo }));
+      preWarn.append(el("p", { class: "hint", text: "完整規則與這次要送出的全文：按上方「看這次要送出的提示詞」。" }));
     } catch (_) { /* 拿不到就安靜 */ }
   })();
 
@@ -2738,7 +2785,10 @@ function promptPreviewPanel(engine, shotId) {
       el("ol", { class: "pp-rules" }, ...rules.map((t) => el("li", { text: t })))));
     if (res.problems && res.problems.length) {
       body.append(el("div", { class: "pp-sec" },
-        el("div", { class: "pp-sec-title err-text", text: `未過規則（${res.problems.length}）` }),
+        el("div", { class: "pp-sec-title err-text", text: `原提示詞未過規則（${res.problems.length}）` }),
+        el("p", { class: "hint", text: res.promptSource === "compiled"
+          ? "送出時會自動改用下面「這次要送出的提示詞」，這裡列的是你原稿不合規的地方（不用手動改）。"
+          : "這些地方要先改，否則送不出去。" }),
         el("ul", { class: "warn-list" }, ...res.problems.map((t) => el("li", { text: t })))));
     }
     if (res.notes && res.notes.length) {
