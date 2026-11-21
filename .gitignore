@@ -26,3 +26,5 @@ temp/
 #    若日後 docs/ 超過 20MB，改為只留 .md：
 #      docs/shots/
 #      docs/**/*.mp4
+
+docs/nightly-audit/*.json

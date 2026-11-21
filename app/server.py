@@ -12,11 +12,11 @@ import time
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen, promptrules, storyboard
+from . import agentdoc, comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen, promptrules, storyboard
 from . import gpu
 from . import assemble as asm
 from . import paths
@@ -41,6 +41,25 @@ async def _unhandled(request: Request, exc: Exception):
 
 
 # ── API ─────────────────────────────────────────────────────────
+@app.get("/api/agent/manifest")
+def api_agent_manifest():
+    """Agent 對接：機器可讀的完整說明（含每支端點 schema 名稱、硬限制、配方、禁止事項）。"""
+    return agentdoc.manifest(app, version=version.get())
+
+
+@app.get("/api/agent/guide")
+def api_agent_guide():
+    """Agent 對接：給 LLM 讀的操作手冊（Markdown，一份就能上手）。"""
+    body = agentdoc.guide(app, version=version.get())
+    return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/api/agent/coverage")
+def api_agent_coverage():
+    """Agent 對接：文件完整度自檢（哪些 API 還沒有語意說明）。"""
+    return agentdoc.coverage(app)
+
+
 @app.get("/api/health")
 def health():
     ver = version.get()
