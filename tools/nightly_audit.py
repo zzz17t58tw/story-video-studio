@@ -216,9 +216,15 @@ def check_repo() -> dict:
             return f"ERR {e}"
     return {
         "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+        "head": git("log", "-1", "--format=%h %s"),
         "statusShort": git("status", "--short")[:2000],
         "aheadBehind": git("rev-list", "--left-right", "--count", "origin/main...HEAD"),
         "lastCommits": git("log", "--oneline", "-3"),
+        # 前幾天未合併的夜間分支：不列出來就會每天重複修同一件事、分支越積越多
+        "unmergedNightly": [b.strip().lstrip("+* ").strip()
+                            for b in git("branch", "--no-merged", "main").splitlines()
+                            if "fix/nightly-" in b],
+        "worktrees": git("worktree", "list"),
     }
 
 
@@ -265,7 +271,9 @@ def main() -> int:
 
     out_dir = ROOT / "docs" / "nightly-audit"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "latest.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    blob = json.dumps(result, ensure_ascii=False, indent=2)
+    (out_dir / "latest.json").write_text(blob, encoding="utf-8")
+    (out_dir / f"{time.strftime('%Y-%m-%d')}.json").write_text(blob, encoding="utf-8")
 
     # ---- markdown（stdout，cron 注入用）----
     L = []
@@ -318,8 +326,10 @@ def main() -> int:
     L.append(f"- app.js {sw.get('appjsChars')} 字 · 語法 {sw.get('appjsSyntax')}")
     L.append(f"- beatIds 引用數 {sw.get('beatIdsRefs')}（0＝M14 未落地）")
     r = result.get("repo") or {}
-    L.append(f"- git {r.get('branch')} · ahead/behind {r.get('aheadBehind')} · 未提交 {len((r.get('statusShort') or '').splitlines())} 檔")
-    L.append(f"\n完整 JSON：docs/nightly-audit/latest.json")
+    L.append(f"- git {r.get('branch')} @ {r.get('head')} · ahead/behind {r.get('aheadBehind')} · 未提交 {len((r.get('statusShort') or '').splitlines())} 檔")
+    unmerged = r.get("unmergedNightly") or []
+    L.append("- 未合併的夜間分支：" + ("、".join(unmerged) if unmerged else "無"))
+    L.append(f"\n完整 JSON：docs/nightly-audit/{time.strftime('%Y-%m-%d')}.json")
 
     print("\n".join(L))
 
