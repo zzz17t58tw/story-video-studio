@@ -3,7 +3,7 @@ branch: feat/m13a-chat-apply-structured
 milestone: M13a
 status: ready            # wip | ready | merged
 opened: 2026-11-21 12:52（台北）
-files: ["app/storage.py", "app/server.py", "app/h3compose.py", "static/app.js", "static/style.css"]
+files: ["app/storage.py", "app/server.py", "app/h3compose.py", "static/app.js", "static/style.css", "PLAN.md"]
 ---
 
 # 交接單：m13a-chat-apply-structured
