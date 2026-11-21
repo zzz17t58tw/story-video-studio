@@ -295,6 +295,27 @@ body.has-batch .toolbar { position: static; }
 .apply-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .apply-row .inline-select { max-width: 210px; }
 
+/* ── M13a：多欄套用面板 ─────────────────────────────── */
+.ma-host:empty { display: none; }
+.ma-panel { margin-top: 8px; border: 1px solid var(--accent-2); border-radius: var(--radius); background: var(--bg-2); padding: 8px 10px; font-size: 12px; }
+.ma-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.ma-head strong { color: #cfe4ff; }
+.ma-slider, .ma-plain-row { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 6px 0; background: var(--bg-3); }
+.ma-slider.checked, .ma-plain-row.checked { border-color: var(--accent); }
+.ma-slider-head { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.ma-slider-label { font-weight: 600; }
+.ma-input { width: 100%; font-size: 12px; line-height: 1.45; margin-top: 6px; min-height: 48px; }
+.ma-hint { margin: 4px 0 0; font-size: 11px; }
+.ma-preview { margin-top: 4px; }
+.ma-preview ol, ol.ma-list { margin: 4px 0 0 18px; padding: 0; }
+.ma-list li { margin: 1px 0; word-break: break-word; }
+.ma-warn { color: var(--warn); }
+.ma-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ma-note { margin-top: 6px; }
+.ma-summary { margin-top: 4px; color: var(--fg-dim); word-break: break-all; }
+.chip-multi { border-color: var(--accent-2); color: #cfe4ff; }
+.chip-multi:hover { border-color: var(--accent); }
+
 .chat-input { border-top: 1px solid var(--line); padding: 10px 14px 12px; }
 .chat-input textarea { min-height: 84px; }
 .chat-actions { margin-top: 8px; }
@@ -536,3 +557,12 @@ body.has-batch .toolbar { position: static; }
              padding: 8px; margin: 6px 0 0; max-height: 420px; overflow: auto; }
 .pp-prompt.collapsed { max-height: 180px; overflow: hidden; }
 .pp-pre-warn { margin: 4px 0 0; }
+
+/* M13a：整份覆寫後被保留的舊 beat（_skipped）——收合起來，只給需要還原的人看 */
+.beat-dead { margin-top: 6px; }
+.beat-dead > summary { cursor: pointer; opacity: .8; }
+.beat-dead-row { display: flex; gap: 8px; align-items: center; padding: 4px 6px; margin-top: 4px;
+  border: 1px dashed var(--line); border-radius: 6px; opacity: .75; font-size: 12px; }
+.beat-dead-row .beat-kind { min-width: 34px; }
+.ma-mode-row { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; }
+.ma-mode { background: var(--bg-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 12px; }

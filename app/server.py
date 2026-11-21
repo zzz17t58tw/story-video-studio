@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -164,6 +164,18 @@ class ApplyBody(BaseModel):
     path: str
     value: str
     mode: str = "replace"
+
+
+class ApplyItemBody(BaseModel):
+    """M13a：一項套用。value 可以是字串，也可以是整份陣列（chapters／beats／dialogue／outfits）。"""
+    path: str
+    value: Any = ""
+    mode: str = "replace"
+
+
+class ApplyBatchBody(BaseModel):
+    target: TargetBody
+    items: list[ApplyItemBody]
 
 
 class LlmSettingsBody(BaseModel):
@@ -340,6 +352,7 @@ def api_chat_apply(slug: str, body: ApplyBody):
     """把一段文字寫進專案某張卡的某個欄位（使用者按「套用」才會打到這裡）。
 
     M3b：欄位走白名單；beat 用 parentId（所屬場次）定位；shot 直接寫 promptZh/promptEn/spec/dialogue。
+    M13a：單欄介面也是走 apply_to_target（與 apply-batch 同一套驗證）；要一次多欄請用 apply-batch。
     """
     if not (body.value or "").strip():
         return _fail(400, "要套用的內容是空的")
@@ -363,6 +376,39 @@ def api_chat_apply(slug: str, body: ApplyBody):
         label = f"{label} {tid}"
     out["label"] = label
     return out
+
+
+def _apply_label(kind: str, target_after: dict, tid: str | None) -> str:
+    label = _APPLY_LABELS.get(kind, kind)
+    if kind == "shot":
+        return f"第 {target_after.get('no', '?')} 鏡（{tid}）" if isinstance(target_after, dict) else f"鏡頭 {tid}"
+    if tid and kind != "story":
+        return f"{label} {tid}"
+    return label
+
+
+@app.post("/api/projects/{slug}/chat/apply-batch")
+def api_chat_apply_batch(slug: str, body: ApplyBatchBody):
+    """M13a：一次套用多個欄位（含整份章回／beats／dialogue／outfits）。
+
+    一次讀檔 → 逐項寫在記憶體 → 單次 validate_project → 原子寫檔一次；
+    任何一項不合法就整批不寫（400，錯誤訊息指出是第幾項）。
+    """
+    if not body.items:
+        return _fail(400, "items 是空的（至少要勾一個要套用的欄位）")
+    try:
+        result = storage.apply_to_target_batch(
+            slug, body.target.kind, body.target.id,
+            [it.model_dump() for it in body.items],
+            parent_id=body.target.parentId,
+        )
+    except StorageError as e:
+        msg = str(e)
+        status = 404 if msg.startswith("找不到專案") else 400
+        return _fail(status, msg)
+    return {"ok": True, **result,
+            "label": _apply_label(body.target.kind, result.get("targetAfter") or {},
+                                  (result.get("target") or {}).get("id"))}
 
 
 # ── M3c：結構化一次生成（dryRun 只回預覽，不寫檔）──────────────────
