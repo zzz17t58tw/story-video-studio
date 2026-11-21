@@ -316,7 +316,9 @@ def _pick_prompt(project: dict, shot: dict, sendable: list[int]) -> tuple[str, l
     raw = _s(shot.get("promptEn"))
     ctx = {"slots": sendable}
     if raw:
-        ok, problems = promptrules.check("h3_video", raw, ctx)
+        ok, problems, notes = promptrules.check("h3_video", raw, ctx)
+        if notes:
+            warnings.extend(notes)
         if ok:
             return raw, warnings, "promptEn", []
         why = "、".join(problems) if problems else "格式不符"

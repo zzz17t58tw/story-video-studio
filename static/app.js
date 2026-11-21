@@ -2606,6 +2606,11 @@ function promptPreviewPanel(engine, shotId) {
         el("div", { class: "pp-sec-title err-text", text: `未過規則（${res.problems.length}）` }),
         el("ul", { class: "warn-list" }, ...res.problems.map((t) => el("li", { text: t })))));
     }
+    if (res.notes && res.notes.length) {
+      body.append(el("div", { class: "pp-sec" },
+        el("div", { class: "pp-sec-title", text: `品質提醒（${res.notes.length} 項，不影響送出）` }),
+        el("ul", { class: "warn-list" }, ...res.notes.map((t) => el("li", { text: t })))));
+    }
     if (res.warnings && res.warnings.length) {
       body.append(el("div", { class: "pp-sec" },
         el("div", { class: "pp-sec-title", text: `警告（${res.warnings.length}）` }),

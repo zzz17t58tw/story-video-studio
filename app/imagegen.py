@@ -376,7 +376,7 @@ def build_prompt(project: dict, shot: dict, refs: list[dict]) -> tuple[str, list
         bad = [n for n in pic_refs if n not in mapping]
         if bad:
             # M12b：規則只在 app/promptrules.py 寫一份；這裡只借用它把「缺什麼」講成中文
-            _ok, problems = promptrules.check("qwen_image", base, {
+            _ok, problems, _notes = promptrules.check("qwen_image", base, {
                 "refsCount": len(refs), "mode": "ref" if refs else "t2i",
                 "slotOrdinals": list(mapping)})
             alt = ("參照補救：" + "；".join(problems)) if problems else ""
@@ -389,9 +389,10 @@ def build_prompt(project: dict, shot: dict, refs: list[dict]) -> tuple[str, list
     else:
         prompt = base
     # M12b：送件前硬驗（Qwen 官方槽位規則）——不合格就擋，不默默送進模型
-    ok, problems = promptrules.check("qwen_image", prompt, {
+    ok, problems, notes = promptrules.check("qwen_image", prompt, {
         "refsCount": len(refs), "mode": "ref" if refs else "t2i",
         "slotOrdinals": list(mapping)})
+    warnings.extend(notes)
     if not ok:
         raise ImageGenError("提示詞未符合 Qwen Image 2.1 官方規則，已擋下（沒有送 GPU）：\n- "
                             + "\n- ".join(problems))
@@ -1103,9 +1104,11 @@ def _generate_moss_image_impl(project: dict, shot: dict, opts: dict) -> dict:
     if not caption:
         raise ImageGenError("這鏡組不出 MOSS caption（人物卡與場景卡都是空的）：請先寫 promptZh 或補人物/場景設定")
     # M12b：送件前硬驗 MOSS 官方 caption 規則（連續英文、不編號、禁 quality tag、不含 <Picture、
-    # identityAnchors 逐字、尺寸不進 caption）——不合格就擋，講清楚缺什麼，不默默送出。
-    _ok, problems = promptrules.check("moss_t2i", caption,
-                                      promptrules.ctx_for("moss_t2i", project, shot))
+    # 尺寸不進 caption）——硬性違規就擋；錨點沒逐字／caption 偏長只警告（實測幾乎都會超長，
+    # 而且特寫鏡頭組稿刻意不放臉部錨點，擋下來等於整個引擎不能用）。
+    _ok, problems, notes = promptrules.check("moss_t2i", caption,
+                                             promptrules.ctx_for("moss_t2i", project, shot))
+    warnings.extend(notes)
     if not problems and not _ok:
         problems = ["caption 不符合 MOSS 官方標題格式"]
     if problems:

@@ -703,36 +703,36 @@ def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video"))
         return _fail(400, f"不認得的引擎 {engine}（合法值：{'／'.join(promptrules.RULES)}）")
     warnings: list[str] = []
     problems: list[str] = []
+    notes: list[str] = []
     source = "promptEn"
-    try:
-        if eng == "h3_video":
-            refs, w, notes = h3gen.collect_refs(data, shot)
+    # 預覽一律要能看到「真的會送出去的字」，所以任何一段失敗都要退回組稿而不是回空字串。
+    if eng == "h3_video":
+        ref_problems: list[str] = []
+        try:
+            refs, w, ref_notes = h3gen.collect_refs(data, shot)
             warnings.extend(w)
-            sendable = h3gen._sendable_ordinals(refs, notes)
-            prompt, pw, source, problems = h3gen._pick_prompt(data, shot, sendable)
-            warnings.extend(pw)
-            ok = not problems
-        elif eng == "moss_t2i":
-            prompt, warnings = imagegen.build_moss_caption(data, shot)
-            problems = warnings  # MOSS 的組稿警告（缺場景、缺錨點…）都是「會影響成品」的實質缺件
-            ok, _problems = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot))
-        else:
-            refs, w = imagegen.collect_refs(data, shot)
-            warnings.extend(w)
-            prompt, w2 = imagegen.build_prompt(data, shot, refs)
-            warnings.extend(w2)
-            ok, problems = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot, refs=refs))
-            source = "build_prompt"
-    except Exception as e:  # noqa: BLE001 — 預覽失敗一律回中文原因，不要吐 traceback
-        err_text = str(e) if type(e).__name__ in ("ImageGenError", "H3GenError") else f"{type(e).__name__}: {e}"
-        return JSONResponse(status_code=200, content={
-            "ok": False, "engine": eng, "ruleId": rule["id"], "label": rule["label"],
-            "source": rule["source"], "rulesZh": rule["rulesZh"], "prompt": "",
-            "warnings": warnings, "problems": [err_text], "chars": 0,
-            "error": f"組提示詞失敗：{err_text}"})
+            sendable = h3gen._sendable_ordinals(refs, ref_notes)
+        except Exception as e:  # noqa: BLE001 — 通常是「一個可用的參考圖都沒有」
+            ref_problems.append(str(e))
+            sendable = [s["ordinal"] for s in (shot.get("referencePlan") or {}).get("slots") or []
+                        if isinstance(s, dict) and s.get("ordinal")]
+        prompt, pw, source, problems = h3gen._pick_prompt(data, shot, sendable)
+        warnings.extend(pw)
+        problems = ref_problems + list(problems)
+        ok = not problems
+    elif eng == "moss_t2i":
+        prompt, warnings = imagegen.build_moss_caption(data, shot)
+        ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot))
+    else:
+        refs, w = imagegen.collect_refs(data, shot)
+        warnings.extend(w)
+        prompt, w2 = imagegen.build_prompt(data, shot, refs)
+        warnings.extend(w2)
+        ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot, refs=refs))
+        source = "build_prompt"
     return {"ok": ok, "engine": eng, "ruleId": rule["id"], "label": rule["label"],
             "source": rule["source"], "rulesZh": rule["rulesZh"], "prompt": prompt,
-            "promptSource": source, "warnings": warnings, "problems": problems,
+            "promptSource": source, "warnings": warnings, "problems": problems, "notes": notes,
             "chars": len(prompt)}
 
 

@@ -123,12 +123,16 @@ def ctx_for(engine: str, project: dict, shot: dict, **kw: Any) -> dict:
 
 
 # ── check：三個引擎各一支（純驗證）──────────────────────────────
-def check_h3_video(prompt: str, ctx: dict) -> tuple[bool, list[str]]:
-    """H3 影片（導演台 r2v）：六段式齊全＋`<Picture N>` 都要在本次送得出的槽位內＋非空。"""
+def check_h3_video(prompt: str, ctx: dict) -> tuple[bool, list[str], list[str]]:
+    """H3 影片（導演台 r2v）：六段式齊全＋`<Picture N>` 都要在本次送得出的槽位內＋非空。
+
+    回 (ok, problems, notes)。H3 的 check 只用來決定「要不要改用模板編譯」，
+    所以這裡全部算硬性問題，notes 恆為空。
+    """
     text = _s(prompt)
     problems: list[str] = []
     if not text:
-        return False, ["提示詞是空的（電影模型收不到任何指令）"]
+        return False, ["提示詞是空的（電影模型收不到任何指令）"], []
     found = {int(m.group(1)) for m in _H3_SEG_RE.finditer(text)}
     missing = [name for i, name in enumerate(_H3_SEG_NAMES, start=1) if i not in found]
     if missing:
@@ -149,16 +153,25 @@ def check_h3_video(prompt: str, ctx: dict) -> tuple[bool, list[str]]:
             if unused:
                 problems.append("這些送得出的槽位提示詞沒引用：<Picture "
                                 + ">、<Picture ".join(str(n) for n in unused) + ">（模型可能不認那張圖的身份）")
-    return (not problems), problems
+    return (not problems), problems, []
 
 
-def check_moss_t2i(prompt: str, ctx: dict) -> tuple[bool, list[str]]:
+def check_moss_t2i(prompt: str, ctx: dict) -> tuple[bool, list[str], list[str]]:
     """MOSS Image（t2i，純文字 caption）：一段連續英文、不編號、禁 quality tag、
-    不含 <Picture、identityAnchors 逐字、尺寸不進 caption。"""
+    不含 <Picture、identityAnchors 逐字、尺寸不進 caption。
+
+    回 (ok, problems, notes)：
+      problems＝**硬性格式違規**（編號分段、quality tag、`<Picture`、尺寸、空白）→ 送件口擋下。
+      notes＝**會影響品質但生得出來**的缺件（錨點沒逐字貼、caption 偏長）→ 只警告不擋。
+      為什麼要分開：實測 caption 幾乎都會超過 260 字（identityAnchors 逐字貼就將近 1000 字，
+      skill 也寫「保身份優先、不要為字數砍錨點」），close_up 特寫鏡頭組稿時刻意不寫入鏡者的
+      錨點——這兩種都不該讓使用者完全生不出圖。
+    """
     text = _s(prompt)
     problems: list[str] = []
+    notes: list[str] = []
     if not text:
-        return False, ["caption 是空的（MOSS 只吃文字，空字串等於亂生）"]
+        return False, ["caption 是空的（MOSS 只吃文字，空字串等於亂生）"], []
     numbered = _MOSS_NUMBERED_RE.search(text)
     if numbered:
         problems.append(f"出現編號分段「{numbered.group(0).strip()[:30]}」：那是影片模型（H3）的六段式格式，"
@@ -178,33 +191,40 @@ def check_moss_t2i(prompt: str, ctx: dict) -> tuple[bool, list[str]]:
             continue
         if not any(v in text for v in variants):
             head = variants[0]
-            problems.append(f"{g.get('id')}（{g.get('name')}）的 identityAnchors 沒有逐字出現"
-                            f"（例：「{head}」）：MOSS 靠這句鎖長相，改寫或漏貼就會換人")
+            notes.append(f"{g.get('id')}（{g.get('name')}）的 identityAnchors 沒有逐字出現"
+                         f"（例：「{head}」）：MOSS 靠這句鎖長相，改寫或漏貼就會換人")
     mx = int(ctx.get("maxChars") or 2000)
     if len(text) > mx:
-        problems.append(f"caption 長度 {len(text)} 字元超過上限 {mx}（MOSS 越長越分心）")
-    return (not problems), problems
+        notes.append(f"caption 長度 {len(text)} 字元超過上限 {mx}（MOSS 越長越分心）")
+    elif len(text) > 260:
+        notes.append(f"caption 長度 {len(text)} 字元超過建議的 260（通常來自 identityAnchors 逐字貼，"
+                     "保身份優先；想更準可精簡場景與動作描述）")
+    return (not problems), problems, notes
 
 
-def check_qwen_image(prompt: str, ctx: dict) -> tuple[bool, list[str]]:
+def check_qwen_image(prompt: str, ctx: dict) -> tuple[bool, list[str], list[str]]:
     """Qwen Image 2.1（i2i／t2i）：`<imageK>` 都要有實際送出的 images.image_K；
-    i2i 沒送任何參考圖就擋；t2i 不該再引用參考圖槽位。"""
+    i2i 沒送任何參考圖只警告（preflight 已另擋）；t2i 不該再引用參考圖槽位。"""
     text = _s(prompt)
     problems: list[str] = []
+    notes: list[str] = []
     if not text:
-        return False, ["提示詞是空的"]
+        return False, ["提示詞是空的"], []
     refs_count = int(ctx.get("refsCount") or 0)
     mode = _s(ctx.get("mode")) or "ref"
     used = sorted({int(n) for n in re.findall(r"<image\s*(\d+)>", text, flags=re.I)})
     if mode == "ref" and refs_count <= 0:
-        problems.append("i2i 模式卻沒有送出任何參考圖（沒有 images.image_1 可對應）")
+        notes.append("i2i 模式卻沒有送出任何參考圖（沒有 images.image_1 可對應）")
+    if re.match(r"\s*1\.\s*Subject\s*:", text, flags=re.I):
+        notes.append("提示詞是 H3 的六段式寫法（給影片模型用的）：Qwen 讀得懂，"
+                     "但官方建議用「場景＋主體＋動作」的連續描述；有 <imageK> 對應就不影響鎖臉")
     bad = [n for n in used if not (1 <= n <= refs_count)]
     if bad:
         problems.append("引用了不存在的 <image" + ">、<image".join(str(n) for n in bad)
                         + f">（這次只送 {refs_count} 張圖）")
     if re.search(r"<picture\s*\d*>", text, flags=re.I):
         problems.append("還留著 <Picture N>：Qwen 模板的槽位寫法是 <image1>…<image4>，送件前要換掉")
-    return (not problems), problems
+    return (not problems), problems, notes
 
 
 # ── build：包裝既有組稿函式（不在這裡重寫任何組稿邏輯）───────────
@@ -304,11 +324,14 @@ def describe() -> list[dict]:
 
 
 # ── 對外：prepare / check ───────────────────────────────────────
-def check(engine: str, prompt: str, ctx: dict | None = None) -> tuple[bool, list[str]]:
-    """驗證提示詞是否符合該引擎的官方規則。回 (ok, problems)（problems 是中文）。"""
+def check(engine: str, prompt: str, ctx: dict | None = None) -> tuple[bool, list[str], list[str]]:
+    """驗證提示詞是否符合該引擎的官方規則。回 (ok, problems, notes)（皆中文）。
+
+    problems＝硬性違規（送件口要擋／要改用模板編譯）；notes＝會影響品質的警告（照送，只提示）。
+    """
     rule = rule_of(engine)
     if rule is None:
-        return False, [f"不認得的引擎 {engine}（合法值：{'／'.join(RULES)}）"]
+        return False, [f"不認得的引擎 {engine}（合法值：{'／'.join(RULES)}）"], []
     return rule["check"](prompt, ctx or {})
 
 
@@ -325,7 +348,8 @@ def prepare(engine: str, project: dict, obj: dict, **kw: Any) -> tuple[str, list
     prompt = _s(prompt)
     warnings = list(warnings or [])
     ctx = kw.get("ctx") or ctx_for(rule["id"], project, obj, **kw)
-    ok, problems = rule["check"](prompt, ctx)
+    ok, problems, notes = rule["check"](prompt, ctx)
+    warnings.extend(notes)
     if not ok:
         warnings.append(f"提示詞未符合「{rule['label']}」官方規則，缺：" + "；".join(problems))
     return prompt, warnings, rule["id"]
