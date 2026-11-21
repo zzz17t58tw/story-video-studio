@@ -256,12 +256,17 @@ def _stage_line(data: dict, ch: dict, stid: str) -> str:
     return ", ".join(bits)
 
 
-def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
+def compile_prompt(data: dict, shot: dict,
+                   first_frame_as_picture: bool = False) -> tuple[str, list[str], dict]:
     """確定性模板編譯（不呼模型）。回 (promptEn, warnings, meta)。
 
     六段式：1 subject_definitions / 2 summary(動作) / 3 retention_analysis(鏡頭語言)
             4 detailed_description(光影/構圖) / 5 overall_soundscape(氛圍與現場聲) / 6 non_diegetic_music(音訊/台詞)
     圖片引用一律 `<Picture N>`，N 取自 referencePlan.slots 的 ordinal。
+
+    first_frame_as_picture：這鏡沒有任何角色參考圖、但送件時把首幀當 <Picture 1>（見
+    h3gen.collect_refs 的 firstFrameAsPicture）。以前這裡不寫 <Picture 1>，導致編譯稿
+    與實際送出的圖對不上（H3 只把首幀當氛圍、不鎖主體），現在由呼叫端明確告知。
     """
     warnings: list[str] = []
     ctx = find_scene_ctx(data, shot)
@@ -273,6 +278,12 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
 
     # ① 主體定義
     subject_bits = []
+    if first_frame_as_picture and not refs:
+        # 首幀就是這鏡唯一的圖 → 明講「臉與身體以 <Picture 1> 為準」，
+        # 否則模型只會把它當參考氛圍，換臉換衣服。
+        subject_bits.append(
+            "<Picture 1> is the main subject, taken from this shot's first frame: "
+            "keep the same facial identity, hairstyle, body build and clothing as <Picture 1>.")
     char_ids = [c for c in (shot.get("characterIds") or []) if _s(c)]
     for cid in char_ids:
         ch = next((c for c in (data.get("characters") or []) if c.get("id") == cid), None)
@@ -306,7 +317,11 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
         subject_bits.append(f"{stag} is the location: {sc_desc}"
                             + (f" ({_s(sc.get('timeOfDay'))})" if _s((sc or {}).get("timeOfDay")) else ""))
     if not refs:
-        warnings.append("這鏡沒有參考圖槽位（<Picture N> 無從對應）；建議先按「建參考圖槽位」或補上傳參考圖")
+        if first_frame_as_picture:
+            warnings.append("這鏡沒有角色／場景參考圖槽位；本次用本鏡首幀當 <Picture 1>"
+                            "（要鎖同一個人的臉，請先在人物頁生成立繪再按「建參考圖槽位」）")
+        else:
+            warnings.append("這鏡沒有參考圖槽位（<Picture N> 無從對應）；建議先按「建參考圖槽位」或補上傳參考圖")
     else:
         warnings.append(f"已編譯者請確認 slots 順序：{'、'.join(f'#%s %s' % (s['ordinal'], s['id']) for s in refs)}")
 
@@ -700,12 +715,58 @@ def validate_project(data: dict) -> dict:
                 issues.append(_issue("error", "character", ch.get("id"),
                                      f"colorAnchors.{k}「{v}」不是 #RRGGBB", ch.get("name") or ch.get("id")))
 
+    # 同一顆角色／場景在每一鏡各報一次，6 鏡專案就會出現 5 條同因 warn；
+    # 使用者看到一堆重複警告反而找不到「到底缺幾張圖」。合併成「一顆角色一筆、
+    # 附被哪些鏡頭用到」，其餘 issue 原樣保留、順序不變。
+    issues = _merge_missing_ref_issues(issues)
+
     counts = {"error": sum(1 for i in issues if i["level"] == "error"),
               "warn": sum(1 for i in issues if i["level"] == "warn")}
     return {"issues": issues, "counts": counts,
             "checked": {"shots": len(data.get("shots") or []), "scenes": len(scenes),
                         "characters": len(chars), "fps": fps},
             "at": _now()}
+
+
+def _merge_missing_ref_issues(issues: list[dict]) -> list[dict]:
+    """把「角色／場景沒有參考圖」的逐鏡重複 warn 併成一筆。
+
+    不直接用 targetId 當鍵：targetId 是「哪一鏡」，真正的重複來源是同一顆角色／場景。
+    """
+    merged: dict[str, dict] = {}
+    out: list[dict] = []
+    for it in issues:
+        msg = _s(it.get("message"))
+        is_missing = (it.get("level") == "warn" and it.get("scope") == "shot"
+                      and (msg.endswith("→ 送 H3 時是 weak reference")
+                           or msg.endswith("→ 場景一致性只能靠文字")))
+        if is_missing:
+            key = _missing_ref_key(msg)
+            if key not in merged:
+                copy = dict(it)
+                copy["_msgs"] = [msg]
+                copy["_shots"] = [it.get("name") or ""]
+                merged[key] = copy
+                out.append(copy)
+            else:
+                merged[key]["_msgs"].append(msg)
+                merged[key]["_shots"].append(it.get("name") or "")
+        else:
+            out.append(it)
+    for copy in merged.values():
+        names = [n for n in dict.fromkeys(copy.pop("_shots", [])) if n]
+        uniq = list(dict.fromkeys(copy.pop("_msgs", [])))
+        base = uniq[0] if uniq else _s(copy.get("message"))
+        if len(names) > 1:
+            base += f"（被 {'、'.join(names)} 用到）"
+        copy["message"] = base
+    return out
+
+
+def _missing_ref_key(msg: str) -> str:
+    """從「角色 c01（阿哲）沒有參考圖 → …」抽出 `角色:c01` 當合併鍵。"""
+    m = re.search(r"(角色|場景)\s+([A-Za-z0-9_:-]+)", msg)
+    return f"{m.group(1)}:{m.group(2)}" if m else msg
 
 
 def _now() -> str:

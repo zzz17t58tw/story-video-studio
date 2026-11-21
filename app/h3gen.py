@@ -239,9 +239,14 @@ def collect_refs(project: dict, shot: dict, allow_first_frame: bool = True) -> t
         if _is_placeholder(fp):
             warnings.append(f"首幀 {first} 也是占位圖，不送")
         elif not has_char:
+            had_other_ref = bool(out)   # 只有場景圖、沒有角色圖 vs 一張都沒有
             out.insert(0, {"ordinal": 0, "path": first, "kind": "firstFrame", "id": "first"})
             notes["firstFrameAsPicture"] = 1
-            warnings.append("角色槽位沒有可用圖（都是占位圖）：改用本鏡首幀當 <Picture 1> 參考主體")
+            warnings.append(
+                ("沒有角色的參考圖（角色槽位是占位圖或沒建）：改用本鏡首幀當 <Picture 1> 參考主體"
+                 if had_other_ref else
+                 "沒有任何角色／場景參考圖：改用本鏡首幀當 <Picture 1> 參考主體"
+                 "（要鎖同一個人的臉，請先在人物頁按「生成立繪」再建參考圖槽位）"))
         else:
             notes["startImage"] = first
     if len(out) > MAX_REFS:
@@ -305,11 +310,13 @@ def _sendable_ordinals(refs: list[dict], notes: dict) -> list[int]:
     return sorted({int(r["ordinal"]) for r in refs if r.get("ordinal") is not None and int(r["ordinal"]) >= 1})
 
 
-def _pick_prompt(project: dict, shot: dict, sendable: list[int]) -> tuple[str, list[str], str, list[str]]:
+def _pick_prompt(project: dict, shot: dict, sendable: list[int],
+                 first_frame_as_picture: bool = False) -> tuple[str, list[str], str, list[str]]:
     """決定這次要送出的提示詞（M12b：送件口硬驗）。
 
     規則是 promptEn 合格就用它；不合格（或空白）就改用 app/h3compose.py 的模板編譯結果。
     **一律不寫回 project.json**（送件口不偷改使用者的資料）。
+    first_frame_as_picture：送件時把首幀當 <Picture 1>（collect_refs 判定），編譯稿要跟著寫。
     回 (prompt, warnings, promptSource, problems)；promptSource ∈ {"promptEn", "compiled"}。
     """
     warnings: list[str] = []
@@ -322,7 +329,7 @@ def _pick_prompt(project: dict, shot: dict, sendable: list[int]) -> tuple[str, l
         if ok:
             return raw, warnings, "promptEn", []
         why = "、".join(problems) if problems else "格式不符"
-        compiled, cw, _meta = _h3compose().compile_prompt(project, shot)
+        compiled, cw, _meta = _h3compose().compile_prompt(project, shot, first_frame_as_picture)
         compiled = _s(compiled)
         if compiled:
             warnings.append(f"promptEn 未符合 H3 官方規則（缺：{why}），已改用模板編譯"
@@ -330,7 +337,7 @@ def _pick_prompt(project: dict, shot: dict, sendable: list[int]) -> tuple[str, l
             return compiled, warnings + list(cw), "compiled", problems
         raise H3GenError("這鏡的 promptEn 未符合 H3 官方規則（缺：" + why
                          + "），而且模板編譯也組不出提示詞：請先補人物卡／場景卡或按「⌘ 模板編譯 prompt」")
-    compiled, cw, _meta = _h3compose().compile_prompt(project, shot)
+    compiled, cw, _meta = _h3compose().compile_prompt(project, shot, first_frame_as_picture)
     compiled = _s(compiled)
     if not compiled:
         raise H3GenError("這鏡沒有提示詞（promptEn 空）：請先寫提示詞或按「⌘ 模板編譯 prompt」")
@@ -360,7 +367,14 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
     dw, dh = size_for_aspect(aspect)
     width = _clamp_int(opts.get("width"), 32, 8192, dw)
     height = _clamp_int(opts.get("height"), 32, 8192, dh)
-    legal = legal_frames(_clamp_int(opts.get("frames"), 5, 100000, DEFAULT_FRAMES))
+    # 影格數：opts 沒指定就跟著這一鏡的 durationSec（17k+5 吸附）。
+    # 以前一律用 DEFAULT_FRAMES=39／前端寫死 124，設定 9.42 秒的鏡只會生出 5.17 秒，
+    # 台詞多的鏡一定唸不完（V3 長度合法就變成裝飾）。
+    frames_opt = opts.get("frames")
+    if frames_opt in (None, ""):
+        dsec = float(shot.get("durationSec") or 0) or 0.0
+        frames_opt = round(dsec * FRAME_RATE) if dsec > 0 else DEFAULT_FRAMES
+    legal = legal_frames(_clamp_int(frames_opt, 5, 100000, DEFAULT_FRAMES))
     total_frames = _total_frames_for(legal)
     duration_sec = round(legal / FRAME_RATE, 3)
     seed = _clamp_int(opts.get("seed"), 0, 2 ** 31 - 1, random.randint(0, 2 ** 31 - 1))
@@ -372,7 +386,8 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
     # promptEn 合格 → 原樣送；不合格（缺六段／<Picture N> 對不上／沒有 <Picture）→ 改用
     # h3compose.compile_prompt 的即時結果，並在 warnings 寫清楚缺什麼（不寫回 project.json）。
     sendable = _sendable_ordinals(refs, notes)
-    prompt, pw, prompt_source, prompt_problems = _pick_prompt(project, shot, sendable)
+    prompt, pw, prompt_source, prompt_problems = _pick_prompt(
+        project, shot, sendable, bool(notes.get("firstFrameAsPicture")))
     warnings.extend(pw)
 
     ordinals = [r["ordinal"] for r in refs]

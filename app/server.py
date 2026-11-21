@@ -773,6 +773,7 @@ def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video"))
     # 預覽一律要能看到「真的會送出去的字」，所以任何一段失敗都要退回組稿而不是回空字串。
     if eng == "h3_video":
         ref_problems: list[str] = []
+        ref_notes: dict = {}
         try:
             refs, w, ref_notes = h3gen.collect_refs(data, shot)
             warnings.extend(w)
@@ -781,7 +782,9 @@ def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video"))
             ref_problems.append(str(e))
             sendable = [s["ordinal"] for s in (shot.get("referencePlan") or {}).get("slots") or []
                         if isinstance(s, dict) and s.get("ordinal")]
-        prompt, pw, source, problems = h3gen._pick_prompt(data, shot, sendable)
+        # 預覽必須跟送件口看到同一份字：首幀當 <Picture 1> 時，編譯稿也要寫 <Picture 1>
+        prompt, pw, source, problems = h3gen._pick_prompt(
+            data, shot, sendable, bool(ref_notes.get("firstFrameAsPicture")))
         warnings.extend(pw)
         problems = ref_problems + list(problems)
         ok = not problems
