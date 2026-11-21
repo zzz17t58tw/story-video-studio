@@ -129,6 +129,8 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ## shots[] 追加／強化
 
+> ⚠️ **分鏡的權威規則見 `docs/storyboard-contract.md`**（2026-11-21）。本節只列欄位；「誰可以寫什麼、長度怎麼算、覆蓋怎麼驗」一律以該檔為準。
+
 ```jsonc
 "spec": {
   "shotType": "close_up|medium|wide|over_shoulder|pov",   // 顯示層仍可翻中文
@@ -138,10 +140,17 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
   "cameraMove": "static|push_in|pull_out|pan_left|pan_right|tracking|handheld",
   "composition": "", "lighting": "", "framingRule": "has_person→medium|mcu|cu（禁 wide）"
 },
+"beatIds": [ "b05" ],                // **主鍵（2026-11-21 起）**：本鏡演出的 beats，有序、連續、不跨場次
+"beatPart": { "beatId": "b05", "part": 1, "total": 2 },  // 單一 beat 超過 15.08 秒時拆鏡用
+"role": "establish|dialogue|reaction|action|insert|closing",  // 本鏡的敘事職責
+"derivedFrom": "storyboard|deploy|manual",   // 這個鏡頭是規則式分鏡、LLM 佈署、還是人手調的
+"padSec": 0.0,                       // 為滿足 H3 最短 5.17 秒而留白（停留／反應）的秒數
 "beats": [ { "start": 0.0, "end": 5.0, "cut": false, "action": "", "camera": "", "locationId": "" } ],
-"dialogBeatIds": [ "b02", "b04" ],   // **主鍵**：本鏡演出哪幾句台詞，存所屬場次的 beat id（劇本插/刪/搬句不會錯位）
+                                     // ⚠️ 已停用（自由敘述，type 常為 null）；舊資料遷移進 legacyBeats，不參與生成
+"dialogBeatIds": [ "b02", "b04" ],   // 由 beatIds 內 dialogue beats 推導（本輪起衍生，不再手填）
 "dialogLineRefs": [ 1, 3 ],          // 衍生值：由 dialogBeatIds 換算的「第幾句 dialogue」（1-based，舊資料相容欄位）
-"dialogue": [ { "characterId": "c01", "line": "" } ],  // 本鏡臨時對白，不寫進劇本（舊欄位，保留但非主線）
+"dialogue": [ { "characterId": "c01", "line": "" } ],
+                                     // ⚠️ 已停用：台詞一律由 beatIds → 場次 beats 取原文；舊資料保留不刪但不讀
 "stageIds": [ "c01:s2" ],           // 本鏡要用角色的哪個 stage 參考圖
 "sourceChapterId": "ch01",
 "referencePlan": {                  // 送 H3 的參考圖槽位計畫（最多 9 張），由程式產生、模型不得自己寫
@@ -155,9 +164,11 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ## 機械校驗（送生成前必跑，零 API 成本）
 
+> 分鏡相關的 V1–V5（順序覆蓋、台詞覆蓋、長度合法、台詞唸得完、職責一致）以 `docs/storyboard-contract.md` §4 為準，以下為其他項目。
+
 1. `dialogBeatIds` 覆蓋所屬場次全部 dialogue（每個 dialogue beat 剛好被一鏡引用），無漏、無重複；`dialogLineRefs` 由它換算，兩者不一致時以 `dialogBeatIds` 為準並自動重算。
 2. `promptEn` 內的 `<Picture N>` 必須與 `referencePlan.slots` 的 ordinal 一一對應且順序一致。
-3. `durationSec` 換算的影格數落在 H3 合法格（17k+5 附近；`total_frames` 需 17k+1 對齊，見 contracts §3）。
+3. `durationSec` 換算的影格數落在 H3 合法格（17k+5，且 124–362 幀＝5.17–15.08 秒；`total_frames` 需 17k+1 對齊，見 contracts §3）。
 4. 含人物的鏡頭不得為 wide（MSB framing rule）。
 5. 場景參考圖 prompt 必須含「畫面內不得有人（含剪影、倒影、背影）」。
 
