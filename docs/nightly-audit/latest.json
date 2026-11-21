@@ -1,0 +1,446 @@
+{
+  "at": "2026-11-21 17:36:30",
+  "health": {
+    "version": "0.9.5",
+    "pid": 51908,
+    "dataDir": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\svs-nightly\\projects"
+  },
+  "projects": [
+    {
+      "slug": "project-20261119-115223",
+      "load": "ok",
+      "name": "喪失爆發",
+      "counts": {
+        "characters": 3,
+        "scenes": 2,
+        "shots": 6
+      },
+      "durationSec": 41.63,
+      "validate": {
+        "raw": 6,
+        "errors": 0,
+        "warnsDedup": 2,
+        "warnSample": [
+          "場景 sc01（「坑」地下停車場競技場（深夜））沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc02（城南軍用地下設施手術走廊（凌晨））沒有參考圖 → 場景一致性只能靠文字"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 6,
+        "shotsWithPromptPicture": 0,
+        "total": 6
+      },
+      "assemble": {
+        "segments": 6,
+        "existing": 0,
+        "total": 0
+      },
+      "preflight": {
+        "ok": true,
+        "blocked": 0,
+        "blockers": []
+      }
+    },
+    {
+      "slug": "project-20261120-172537",
+      "load": "ok",
+      "name": "重生劍與魔法世界",
+      "counts": {
+        "characters": 3,
+        "scenes": 2,
+        "shots": 6
+      },
+      "durationSec": 72.78,
+      "validate": {
+        "raw": 18,
+        "errors": 0,
+        "warnsDedup": 5,
+        "warnSample": [
+          "場景 sc01（冒險者公會大祭會場・深夜）沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc02（聖女塔塔頂・清晨）沒有參考圖 → 場景一致性只能靠文字",
+          "角色 c01（林旭）沒有參考圖 → 送 H3 時是 weak reference",
+          "角色 c02（艾麗絲）沒有參考圖 → 送 H3 時是 weak reference",
+          "角色 c03（莉娜）沒有參考圖 → 送 H3 時是 weak reference"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 6,
+        "shotsWithPromptPicture": 0,
+        "total": 6
+      },
+      "assemble": {
+        "segments": 6,
+        "existing": 0,
+        "total": 0
+      },
+      "preflight": {
+        "ok": false,
+        "blocked": 6,
+        "blockers": [
+          "c01（林旭）沒有鎖臉圖，也沒有任何可用的參考圖：請先上傳一張臉部照（人物卡 → 參考圖 → kind=face 並勾「鎖臉」），否則這鏡的臉不會被鎖住",
+          "c02（艾麗絲）沒有鎖臉圖，也沒有任何可用的參考圖：請先上傳一張臉部照（人物卡 → 參考圖 → kind=face 並勾「鎖臉」），否則這鏡的臉不會被鎖住",
+          "這鏡沒有任何可送的參考圖（referencePlan 與人物/場景卡都沒有可用圖片）"
+        ]
+      }
+    },
+    {
+      "slug": "project-20261118-022129",
+      "load": "ok",
+      "name": "雨夜便利商店",
+      "counts": {
+        "characters": 3,
+        "scenes": 2,
+        "shots": 6
+      },
+      "durationSec": 30.0,
+      "validate": {
+        "raw": 26,
+        "errors": 0,
+        "warnsDedup": 6,
+        "warnSample": [
+          "durationSec=5s 換算 120 幀，非 H3 合法格；建議吸附到 124 幀（total_frames 對齊 120=17k+1）",
+          "promptEn 沒有任何 <Picture N> 引用（參考圖沒被點名，模型可能不認臉）",
+          "referencePlan 有 slot 1 但 promptEn 沒引用 <Picture 1>",
+          "referencePlan 有 slot 2 但 promptEn 沒引用 <Picture 2>",
+          "場景 sc01（便利店內・深夜）沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc02（店外騎樓・大雨）沒有參考圖 → 場景一致性只能靠文字"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 6,
+        "shotsWithPromptPicture": 0,
+        "total": 6
+      },
+      "assemble": {
+        "segments": 6,
+        "existing": 6,
+        "total": 31.0
+      }
+    },
+    {
+      "slug": "project-20261118-182650",
+      "load": "ok",
+      "name": "佈署修正驗收（總鏡數6）",
+      "counts": {
+        "characters": 3,
+        "scenes": 2,
+        "shots": 6
+      },
+      "durationSec": 56.5,
+      "validate": {
+        "raw": 15,
+        "errors": 0,
+        "warnsDedup": 4,
+        "warnSample": [
+          "場景 sc01（老鐘錶行店內・深夜）沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc02（鐘錶行騎樓外・清晨）沒有參考圖 → 場景一致性只能靠文字",
+          "角色 c02（阿澈）沒有參考圖 → 送 H3 時是 weak reference",
+          "角色 c03（陳伯）沒有參考圖 → 送 H3 時是 weak reference"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 5,
+        "shotsWithPromptPicture": 0,
+        "total": 6
+      },
+      "assemble": {
+        "segments": 6,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261118-170108",
+      "load": "ok",
+      "name": "一鍵佈署驗收（雨夜收據）",
+      "counts": {
+        "characters": 9,
+        "scenes": 7,
+        "shots": 39
+      },
+      "durationSec": 215.08,
+      "validate": {
+        "raw": 126,
+        "errors": 0,
+        "warnsDedup": 16,
+        "warnSample": [
+          "場景 sc01（便利商店收銀櫃台（深夜・暴雨））沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc02（飲料冰櫃走道與店門口（深夜・暴雨））沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc03（街角便利商店收銀櫃台（深夜・暴雨））沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc04（便利商店冰櫃飲料走道（午夜・櫃台燈熄後））沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc05（便利商店櫃台・深夜暴雨）沒有參考圖 → 場景一致性只能靠文字",
+          "場景 sc06（便利商店冰櫃走道・深夜（櫃台燈熄滅後））沒有參考圖 → 場景一致性只能靠文字"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 23,
+        "shotsWithPromptPicture": 0,
+        "total": 39
+      },
+      "assemble": {
+        "segments": 39,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261117-221919",
+      "load": "ok",
+      "name": "M2b 驗收專案（final）",
+      "counts": {
+        "characters": 2,
+        "scenes": 2,
+        "shots": 9
+      },
+      "durationSec": 105.0,
+      "validate": {
+        "raw": 45,
+        "errors": 18,
+        "warnsDedup": 10,
+        "warnSample": [
+          "durationSec=15s 換算 360 幀，非 H3 合法格；建議吸附到 362 幀（total_frames 對齊 358=17k+1）",
+          "durationSec=4s → 96 幀，吸附後 90 幀（17k+5）不在 H3 訓練域 124–362，建議 5.17–15.08 秒",
+          "durationSec=4s 換算 96 幀，非 H3 合法格；建議吸附到 90 幀（total_frames 對齊 86=17k+1）",
+          "durationSec=5s 換算 120 幀，非 H3 合法格；建議吸附到 124 幀（total_frames 對齊 120=17k+1）",
+          "durationSec=6s 換算 144 幀，非 H3 合法格；建議吸附到 141 幀（total_frames 對齊 137=17k+1）",
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 3,
+        "shotsWithPromptPicture": 1,
+        "total": 9
+      },
+      "assemble": {
+        "segments": 9,
+        "existing": 2,
+        "total": 6.79
+      }
+    },
+    {
+      "slug": "project-20261117-070430",
+      "load": "ok",
+      "name": "第二個測試",
+      "counts": {
+        "characters": 1,
+        "scenes": 0,
+        "shots": 0
+      },
+      "durationSec": 0,
+      "validate": {
+        "raw": 1,
+        "errors": 0,
+        "warnsDedup": 1,
+        "warnSample": [
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 0,
+        "total": 0
+      },
+      "assemble": {
+        "segments": 0,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261117-m5b-verify",
+      "load": "ok",
+      "name": "M5b 驗收專案（批次＋合併）",
+      "counts": {
+        "characters": 2,
+        "scenes": 2,
+        "shots": 3
+      },
+      "durationSec": 45.0,
+      "validate": {
+        "raw": 15,
+        "errors": 6,
+        "warnsDedup": 4,
+        "warnSample": [
+          "durationSec=15s 換算 360 幀，非 H3 合法格；建議吸附到 362 幀（total_frames 對齊 358=17k+1）",
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）",
+          "場景 prompt 缺「畫面內不得有人（含剪影、倒影、背影）」（或英文 no people in silhouette / in reflection）這句空景禁人語，免得生出路人",
+          "角色 c01（小紅帽）沒有參考圖 → 送 H3 時是 weak reference"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 3,
+        "total": 3
+      },
+      "assemble": {
+        "segments": 3,
+        "existing": 3,
+        "total": 4.88
+      }
+    },
+    {
+      "slug": "project-20261117-221600",
+      "load": "ok",
+      "name": "M2b 驗收專案",
+      "counts": {
+        "characters": 1,
+        "scenes": 2,
+        "shots": 5
+      },
+      "durationSec": 25.0,
+      "validate": {
+        "raw": 25,
+        "errors": 4,
+        "warnsDedup": 10,
+        "warnSample": [
+          "durationSec=4s → 96 幀，吸附後 90 幀（17k+5）不在 H3 訓練域 124–362，建議 5.17–15.08 秒",
+          "durationSec=4s 換算 96 幀，非 H3 合法格；建議吸附到 90 幀（total_frames 對齊 86=17k+1）",
+          "durationSec=5s 換算 120 幀，非 H3 合法格；建議吸附到 124 幀（total_frames 對齊 120=17k+1）",
+          "durationSec=6s 換算 144 幀，非 H3 合法格；建議吸附到 141 幀（total_frames 對齊 137=17k+1）",
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）",
+          "promptEn 是空的（可先按「模板編譯 prompt」產生草稿）"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 0,
+        "total": 5
+      },
+      "assemble": {
+        "segments": 5,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261117-220835",
+      "load": "ok",
+      "name": "M2a 驗收專案",
+      "counts": {
+        "characters": 1,
+        "scenes": 1,
+        "shots": 0
+      },
+      "durationSec": 0,
+      "validate": {
+        "raw": 2,
+        "errors": 0,
+        "warnsDedup": 2,
+        "warnSample": [
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）",
+          "場景 prompt 缺「畫面內不得有人（含剪影、倒影、背影）」（或英文 no people in silhouette / in reflection）這句空景禁人語，免得生出路人"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 0,
+        "total": 0
+      },
+      "assemble": {
+        "segments": 0,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261117-220558",
+      "load": "ok",
+      "name": "M2a 驗收專案",
+      "counts": {
+        "characters": 1,
+        "scenes": 1,
+        "shots": 1
+      },
+      "durationSec": 5.0,
+      "validate": {
+        "raw": 5,
+        "errors": 1,
+        "warnsDedup": 4,
+        "warnSample": [
+          "durationSec=5s 換算 120 幀，非 H3 合法格；建議吸附到 124 幀（total_frames 對齊 120=17k+1）",
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）",
+          "promptEn 是空的（可先按「模板編譯 prompt」產生草稿）",
+          "場景 prompt 缺「畫面內不得有人（含剪影、倒影、背影）」（或英文 no people in silhouette / in reflection）這句空景禁人語，免得生出路人"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 0,
+        "total": 1
+      },
+      "assemble": {
+        "segments": 1,
+        "existing": 0,
+        "total": 0
+      }
+    },
+    {
+      "slug": "project-20261117-070132",
+      "load": "ok",
+      "name": "M1 煙霧測試",
+      "counts": {
+        "characters": 1,
+        "scenes": 1,
+        "shots": 1
+      },
+      "durationSec": 5.0,
+      "validate": {
+        "raw": 6,
+        "errors": 0,
+        "warnsDedup": 6,
+        "warnSample": [
+          "durationSec=5s 換算 120 幀，非 H3 合法格；建議吸附到 124 幀（total_frames 對齊 120=17k+1）",
+          "identityAnchors 全是空的（跨鏡鎖臉會很不穩）",
+          "promptEn 是空的（可先按「模板編譯 prompt」產生草稿）",
+          "場景 prompt 缺「畫面內不得有人（含剪影、倒影、背影）」（或英文 no people in silhouette / in reflection）這句空景禁人語，免得生出路人",
+          "場景 sc01（霧中森林）沒有參考圖 → 場景一致性只能靠文字",
+          "角色 c01（小雞）沒有參考圖 → 送 H3 時是 weak reference"
+        ]
+      },
+      "beatsCoverage": {
+        "shotsWithBeatIds": 0,
+        "shotsWithDialogBeatIds": 0,
+        "shotsWithPromptPicture": 0,
+        "total": 1
+      },
+      "assemble": {
+        "segments": 1,
+        "existing": 0,
+        "total": 0
+      }
+    }
+  ],
+  "static": {
+    "appjsChars": 296111,
+    "hardcodedText": {
+      "寫死他專案設定（帽影）": true,
+      "等待文案寫死本機模型": true
+    },
+    "deployModalUsesSettingsModel": true,
+    "beatIdsRefs": 0,
+    "appjsSyntax": "ok"
+  },
+  "repo": {
+    "branch": "main",
+    "statusShort": "?? docs/nightly-audit/\n?? tools/nightly_audit.py",
+    "aheadBehind": "0\t1",
+    "lastCommits": "716f788 docs: 分鏡契約 storyboard-contract v1（三層單一真相、H3 長度衝突解法、V1–V5 驗證）\ne593918 docs: v0.9.5 release body（GitHub Release 用）\n3995c1f release: v0.9.5 同步使用端 exe＋重建乾淨版"
+  },
+  "smoke": {
+    "GET /api/prompt-rules": 200,
+    "GET /app.js": 200,
+    "GET /api/llm/status": 200,
+    "GET /api/gpu/status": 200
+  }
+}
