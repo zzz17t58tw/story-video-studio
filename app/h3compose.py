@@ -436,6 +436,143 @@ def _issue(level: str, scope: str, target_id: str, message: str, name: str = "")
             "name": name, "message": message}
 
 
+def _nonspace_len(text: Any) -> int:
+    import re as _re
+    return len(_re.sub(r"\s+", "", str(text or "")))
+
+
+def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
+    """契約 §4 的 V1／V4／V5（V2 在①、V3 在③）。純邏輯，不動資料。
+
+    V1 順序覆蓋：場次內 shots（依 no）的 beatIds 串接＝該場次 beats（排除 _skipped）。
+      舊專案（沒有 beatIds 也沒有 dialogBeatIds）不報 error，只給 warn「此場次尚未分鏡」。
+    V4 台詞唸得完：durationSec - padSec ≥ 台詞字數 / 4.5。
+    V5 職責一致：dialogue 必含 ≥1 dialogue beat；establish 只能場次第一鏡且不含台詞；
+       reaction 不含台詞；closing／action／insert 不得違反各自的定義。
+    """
+    issues: list[dict] = []
+    shots = [s for s in (data.get("shots") or []) if isinstance(s, dict)]
+    valid_roles = ("establish", "dialogue", "reaction", "action", "insert", "closing")
+
+    for ep in ((data.get("script") or {}).get("episodes") or []):
+        for es in (ep.get("scenes") or []):
+            es_id = es.get("id")
+            es_shots = sorted([s for s in shots if s.get("episodeSceneId") == es_id],
+                              key=lambda s: (int(s.get("no") or 0)))
+            beats = [b for b in (es.get("beats") or []) if isinstance(b, dict) and not b.get("_skipped")]
+            want = [str(b.get("id")) for b in beats if b.get("id")]
+            beat_by_id = {str(b.get("id")): b for b in beats if b.get("id")}
+            label = es.get("title") or es_id
+
+            has_new = any(s.get("beatIds") for s in es_shots)
+            has_any_ref = any(s.get("beatIds") or s.get("dialogBeatIds") for s in es_shots)
+            if es_shots and not has_any_ref:
+                # 舊專案：整場都沒引用任何 beat → 不當錯誤擋人（V1 不誤傷舊資料）
+                issues.append(_issue("warn", "episodeScene", es_id,
+                                     f"此場次尚未分鏡：{len(beats)} 個 beats 沒有任何鏡頭以 beatIds 引用"
+                                     f"（可用「🎬 由劇本自動分鏡」依劇本重生分鏡）", label))
+                continue
+            if not has_new:
+                # 有 dialogBeatIds 但沒有 beatIds（M12a 時期的資料）→ 要求升級格式
+                issues.append(_issue("warn", "episodeScene", es_id,
+                                     "此場次是舊格式（只有 dialogBeatIds、沒有 beatIds）；"
+                                     "V1 順序覆蓋只檢查新格式，建議用「🎬 由劇本自動分鏡」重建", label))
+                continue
+
+            # ── V1 順序覆蓋 ──
+            chain: list[str] = []
+            other_scene_beats: set[str] = set()
+            for s in shots:
+                if s.get("episodeSceneId") != es_id:
+                    other_scene_beats |= {str(x) for x in (s.get("beatIds") or [])}
+            for s in es_shots:
+                for bid in (s.get("beatIds") or []):
+                    if not isinstance(bid, str) or not bid:
+                        continue
+                    if bid not in beat_by_id:
+                        issues.append(_issue(
+                            "error", "shot", s.get("id"),
+                            f"beatIds 引用「{bid}」，但場次 {es_id} 沒有這個 beat"
+                            + ("（它屬於別的場次；分鏡不得跨場次）" if bid in other_scene_beats else "")
+                            + "（合約 V1）", f"第 {s.get('no')} 鏡"))
+                        continue
+                    chain.append(bid)
+            if chain != want:
+                # 找出第一處不一致，訊息要能直接指路
+                first = next((i for i in range(min(len(chain), len(want))) if chain[i] != want[i]), None)
+                if first is not None:
+                    detail = f"第 {first + 1} 個位置：鏡頭串接是 {chain[first]}，劇本是 {want[first]}"
+                elif len(chain) < len(want):
+                    missing = [b for b in want if b not in chain]
+                    detail = f"漏了 {len(missing)} 個 beat：{('、'.join(missing))[:80]}"
+                else:
+                    extra = [b for b in chain if b not in want]
+                    dup = sorted({b for b in chain if chain.count(b) > 1})
+                    detail = ("重複引用：" + "、".join(dup)) if dup else ("多出不在劇本的 beat：" + "、".join(extra))
+                issues.append(_issue(
+                    "error", "episodeScene", es_id,
+                    f"鏡頭的 beatIds 串接（依鏡號）與劇本 beats 不一致（合約 V1）：{detail}",
+                    label))
+
+            # ── V5 職責一致 ──
+            first_shot_id = es_shots[0].get("id") if es_shots else None
+            for s in es_shots:
+                role = _s(s.get("role"))
+                ids = [x for x in (s.get("beatIds") or []) if isinstance(x, str)]
+                ref_beats = [beat_by_id[b] for b in ids if b in beat_by_id]
+                dlg_refs = [b for b in ref_beats if _s(b.get("type") or "dialogue") != "action"]
+                nm = f"第 {s.get('no')} 鏡"
+                if role and role not in valid_roles:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         f"role「{role}」不在六種之內（{'/'.join(valid_roles)}）（合約 V5）", nm))
+                    continue
+                if role == "dialogue" and not dlg_refs:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         "role=dialogue 但這一鏡沒有引用任何 dialogue beat（合約 V5）", nm))
+                if role == "establish":
+                    if s.get("id") != first_shot_id:
+                        issues.append(_issue("error", "shot", s.get("id"),
+                                             "role=establish 只能用在場次第一鏡（合約 V5）", nm))
+                    if dlg_refs:
+                        issues.append(_issue("error", "shot", s.get("id"),
+                                             f"role=establish 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）", nm))
+                if role == "reaction" and dlg_refs:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         f"role=reaction 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）；"
+                                         "要演台詞請改 role=dialogue", nm))
+                if role == "closing" and dlg_refs:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         "role=closing 是純視覺收尾，不得含台詞（合約 V5）", nm))
+                if role == "insert" and (s.get("characterIds") or []) and dlg_refs:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         "role=insert 是細節／物件鏡，不得同時帶人物與台詞（合約 V5）", nm))
+
+    # ── V4 台詞唸得完（逐鏡）＋ V3 的 padSec 合理性 ──
+    for s in shots:
+        ctx = find_scene_ctx(data, s)
+        picked, _src, _errs = shot_dialog_lines(s, ctx)
+        if not picked:
+            continue
+        chars = sum(_nonspace_len(b.get("line")) for _n, b in picked)
+        need = chars / 4.5
+        try:
+            dur = float(s.get("durationSec") or 0)
+            pad = float(s.get("padSec") or 0)
+        except (TypeError, ValueError):
+            continue
+        speakable = dur - pad
+        if speakable + 0.01 < need:
+            issues.append(_issue(
+                "error", "shot", s.get("id"),
+                f"台詞唸不完（合約 V4）：{chars} 字需 {need:.2f} 秒，扣掉留白 {pad:g}s 只剩 {speakable:.2f} 秒"
+                f"（durationSec={dur:g}）→ 配音會被截斷；請加長或拆鏡",
+                f"第 {s.get('no')} 鏡"))
+        if pad < -0.001:
+            issues.append(_issue("error", "shot", s.get("id"),
+                                 f"padSec={pad} 不可為負（合約 §3）", f"第 {s.get('no')} 鏡"))
+    return issues
+
+
 def validate_project(data: dict) -> dict:
     issues: list[dict] = []
     fps = int(((data.get("meta") or {}).get("fps")) or 24)
@@ -489,15 +626,18 @@ def validate_project(data: dict) -> dict:
         elif not prompt_en:
             issues.append(_issue("warn", "shot", sid, "promptEn 是空的（可先按「模板編譯 prompt」產生草稿）", name))
 
-        # ③ 影格
+        # ③ 影格（契約 V3：長度必須落在 H3 合法格 124–362 幀；本版起 warn → error）
         fr = frames_for(sh.get("durationSec"), fps)
         if not fr["inRange"]:
-            issues.append(_issue("warn", "shot", sid,
-                                 f"durationSec={sh.get('durationSec')}s → {fr['raw']} 幀，吸附後 {fr['legal']} 幀（17k+5）不在 H3 訓練域 124–362，建議 5.17–15.08 秒",
+            issues.append(_issue("error", "shot", sid,
+                                 f"durationSec={sh.get('durationSec')}s → {fr['raw']} 幀，吸附後 {fr['legal']} 幀（17k+5）"
+                                 f"不在 H3 合法域 124–362（合約 V3）；請調到 5.17–15.08 秒或按「由劇本自動分鏡」重修",
                                  name))
-        if abs(fr["deltaFrames"]) > 0:
-            issues.append(_issue("warn", "shot", sid,
-                                 f"durationSec={sh.get('durationSec')}s 換算 {fr['raw']} 幀，非 H3 合法格；建議吸附到 {fr['legal']} 幀（total_frames 對齊 {fr['aligned']}=17k+1）",
+        elif abs(fr["deltaFrames"]) > 0:
+            issues.append(_issue("error", "shot", sid,
+                                 f"durationSec={sh.get('durationSec')}s 換算 {fr['raw']} 幀，不是 H3 合法格 17k+5"
+                                 f"（合約 V3）；應吸附到 {fr['legal']} 幀＝{fr['legal'] / fps:.2f}s"
+                                 f"（total_frames 對齊 {fr['aligned']}=17k+1）",
                                  name))
 
         # ④ 含人物不得 wide
@@ -524,6 +664,9 @@ def validate_project(data: dict) -> dict:
                 issues.append(_issue("warn", "shot", sid,
                                      f"場景 {sc.get('id')}（{sc.get('name') or sc.get('id')}）沒有參考圖 → 場景一致性只能靠文字",
                                      name))
+
+    # ── M14a：契約 §4 的分鏡覆蓋／順序／職責（V1／V4／V5；V2 在上方①、V3 在上方③）──
+    issues += _validate_storyboard_contract(data, fps)
 
     # ⑤ 場景 prompt 缺「不得有人」句
     for sc in scenes:

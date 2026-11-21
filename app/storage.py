@@ -676,12 +676,19 @@ def load_project(slug: str) -> dict:
 
 
 def fill_project_defaults_notes(data: dict) -> list[str]:
-    """fill_project_defaults 的旁註版：回台詞引用遷移過程中換算不到的訊息（給前端提示用）。"""
-    return migrate_dialog_linkage(data)
+    """fill_project_defaults 的旁註版（M14a 起）：回台詞引用／分鏡欄位遷移過程的訊息（給前端提示用）。"""
+    notes = migrate_dialog_linkage(data)
+    try:
+        from . import storyboard as _sb  # 延遲匯入：storyboard 會反過來引用本模組
+        notes = _sb.migrate_shot_fields(data) + notes
+    except Exception:  # 遷移只是加值功能，不能讓讀檔失敗
+        pass
+    return notes
 
 
 def save_project(slug: str, data: dict) -> dict:
     """整份寫回（先驗證，再更新 meta.updatedAt，再原子替換）。"""
+    from . import storyboard  # 延遲匯入：storyboard 會反過來引用本模組（避免循環匯入）
     assert_slug(slug)
     if not isinstance(data, dict):
         raise StorageError("project.json 必須是物件")
@@ -691,6 +698,9 @@ def save_project(slug: str, data: dict) -> dict:
     data.pop("_dialogMigration", None)  # 讀取時附給前端的遷移訊息，不寫回檔
     meta["slug"] = slug  # 不讓 body 把 slug 改掉（避免目錄與 slug 分岔）
     strip_llm_api_key(data)  # M3b：API key 永遠不進 project.json
+    # M14a：舊欄位收斂（shot.beats → legacyBeats；不碰 beatIds）——必須在任何驗證之前，
+    # 否則新契約把「只有自由敘述、沒有 beatIds」的舊鏡頭當成缺覆蓋。
+    storyboard.migrate_shot_fields(data)
     # M12a：先把台詞引用正規化（換算／同步 dialogLineRefs），再驗證——
     # 否則只帶舊欄位或只帶新欄位的前端版本會撞到不一致的引用而 400。
     migrate_dialog_linkage(data)

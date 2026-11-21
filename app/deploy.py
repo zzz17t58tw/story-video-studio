@@ -1045,9 +1045,15 @@ def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map
             "episodeSceneId": es_id, "sceneId": es.get("sceneId") or None,
             "characterIds": list(sh.get("characterIds") or []),
             "spec": sh.get("spec") or {},
-            "durationSec": sh.get("durationSec") or 5,
+            # M14a：長度吸附到 H3 合法格（124–362 幀），超出域就夾回域內
+            "durationSec": _fit_frames(sh.get("durationSec") or 5, fps),
             "promptZh": sh.get("promptZh") or "", "promptEn": sh.get("promptEn") or "",
-            "dialogue": [], "beats": sh.get("beats") or [],
+            "dialogue": [], "beats": [],
+            "beatIds": [b for b in (sh.get("beatIds") or beat_ids) if b],
+            "role": sh.get("role") or ("dialogue" if beat_ids else "action"),
+            "derivedFrom": "deploy",
+            "padSec": round(max(0.0, _fit_frames(sh.get("durationSec") or 5, fps)
+                                - float(sh.get("durationSec") or 5)), 2),
             "dialogLineRefs": sorted(set(refs)),
             "dialogBeatIds": [b for b in beat_ids if b],
             "stageIds": [],
