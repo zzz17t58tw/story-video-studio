@@ -82,6 +82,46 @@ def scene_dialogue(ctx: dict) -> list[dict]:
     return [b for b in ((ctx.get("es") or {}).get("beats") or []) if b.get("type") == "dialogue"]
 
 
+def shot_dialog_lines(shot: dict, ctx: dict, warnings: list | None = None) -> tuple[list[tuple[int, dict]], str, list[str]]:
+    """鏡頭台詞 → ([(場次第幾句 1-based, beat)], 來源欄位, 錯誤訊息)。
+
+    M12a：優先讀 dialogBeatIds（beat id 不怕插／刪／搬句錯位），沒有新欄位才退回
+    dialogLineRefs（場次內第 N 句）。回傳依劇本順序（＝演出順序），並先做去重與超範圍
+    檢查：錯誤訊息給 validate 轉成 error（行為與 M12a 前一致：重複、超範圍都要報），
+    warnings（非阻斷的提示）另寫進呼叫端清單。
+    """
+    warnings = warnings if warnings is not None else []
+    errors: list[str] = []
+    dlg = scene_dialogue(ctx)
+    pos = {str(b.get("id")): i + 1 for i, b in enumerate(dlg) if b.get("id")}
+    refs: set[int] = set()
+    source = "dialogLineRefs"
+    ids = [b for b in (shot.get("dialogBeatIds") or []) if isinstance(b, str)]
+    if ids:
+        source = "dialogBeatIds"
+        for b in [x for x in ids if x not in pos]:
+            errors.append(f"dialogBeatIds 引用了所屬場次沒有的台詞 {b}")
+        if len(ids) != len(set(ids)):
+            errors.append("dialogBeatIds 重複引用同一句")
+        refs |= {pos[b] for b in ids if b in pos}
+    else:
+        for r in (shot.get("dialogLineRefs") or []):
+            try:
+                n = int(r)
+            except (TypeError, ValueError):
+                errors.append(f"dialogLineRefs 含非數字值「{r}」")
+                continue
+            if not (1 <= n <= len(dlg)):
+                errors.append(f"dialogLineRefs 超範圍（場次只有 {len(dlg)} 句）：{n}")
+                continue
+            refs.add(n)
+        ints = [r for r in (shot.get("dialogLineRefs") or []) if isinstance(r, int) and not isinstance(r, bool)]
+        dup = sorted({n for n in ints if ints.count(n) > 1})
+        if dup:
+            errors.append("dialogLineRefs 重複：第 " + "、".join(map(str, dup)) + " 句")
+    return [(n, dlg[n - 1]) for n in sorted(refs)], source, errors
+
+
 # ── 1. referencePlan ───────────────────────────────────────────
 def _pick_char_ref(ch: dict) -> dict | None:
     """單一角色的參考圖：鎖臉 face > face > full > 其他；同級取第一張。"""
@@ -327,26 +367,17 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
     if not sound_bits:
         sound_bits.append("natural location ambience, soft distant forest air" if char_ids else "subtle room tone")
 
-    # ⑥ 音訊：台詞（dialogLineRefs → 所屬場次 dialogue 第 N 句）
+    # ⑥ 音訊：台詞（M12a：dialogBeatIds 優先，退回舊 dialogLineRefs → 所屬場次第 N 句）
     dlg_lines = scene_dialogue(ctx)
     spoken = []
-    seen_refs = set()
-    for r in (shot.get("dialogLineRefs") or []):
-        try:
-            n = int(r)
-        except (TypeError, ValueError):
-            continue
-        if n in seen_refs:
-            warnings.append(f"dialogLineRefs 有重複的 {n}")
-            continue
-        seen_refs.add(n)
-        if 1 <= n <= len(dlg_lines):
-            b = dlg_lines[n - 1]
-            spk = _char_names(data, [b.get("characterId")]) if b.get("characterId") else "off-screen voice"
-            emo = f" ({_s(b.get('emotion'))})" if _s(b.get("emotion")) else ""
-            spoken.append(f"{spk}{emo} says \"{_s(b.get('line'))}\"")
-        else:
-            warnings.append(f"dialogLineRefs 指向不存在的第 {n} 句（場次共 {len(dlg_lines)} 句）")
+    picked, _, dlg_errors = shot_dialog_lines(shot, ctx)
+    for msg in dlg_errors:
+        warnings.append(msg)
+    for n, b in picked:
+        spk = _char_names(data, [b.get("characterId")]) if b.get("characterId") else "off-screen voice"
+        emo = f" ({_s(b.get('emotion'))})" if _s(b.get("emotion")) else ""
+        spoken.append(f"{spk}{emo} says \"{_s(b.get('line'))}\"")
+    seen_refs = {n for n, _ in picked}
     missing = [i for i in range(1, len(dlg_lines) + 1) if i not in seen_refs]
     if dlg_lines and missing:
         warnings.append("未覆蓋所屬場次的台詞 " + "、".join(str(i) for i in missing) + "（送生成前校驗會報 error）")
@@ -409,7 +440,7 @@ def validate_project(data: dict) -> dict:
     chars = data.get("characters") or []
     scenes = data.get("scenes") or []
 
-    # ① dialogLineRefs 完整覆蓋所屬場次 dialogue（漏、重複）＋ 覆蓋範圍
+    # ① 台詞覆蓋（M12a：dialogBeatIds 優先、舊 dialogLineRefs 退回）：完整覆蓋所屬場次 dialogue
     for ep in ((data.get("script") or {}).get("episodes") or []):
         for es in (ep.get("scenes") or []):
             dlg = [b for b in (es.get("beats") or []) if b.get("type") == "dialogue"]
@@ -417,24 +448,10 @@ def validate_project(data: dict) -> dict:
             for sh in (data.get("shots") or []):
                 if sh.get("episodeSceneId") != es.get("id"):
                     continue
-                refs = []
-                for r in (sh.get("dialogLineRefs") or []):
-                    try:
-                        refs.append(int(r))
-                    except (TypeError, ValueError):
-                        issues.append(_issue("error", "shot", sh.get("id"),
-                                             f"dialogLineRefs 含非數字值「{r}」", f"第 {sh.get('no')} 鏡"))
-                dup = sorted({n for n in refs if refs.count(n) > 1})
-                if dup:
-                    issues.append(_issue("error", "shot", sh.get("id"),
-                                         "dialogLineRefs 重複：第 " + "、".join(map(str, dup)) + " 句",
-                                         f"第 {sh.get('no')} 鏡"))
-                bad = sorted({n for n in refs if not (1 <= n <= len(dlg))})
-                if bad:
-                    issues.append(_issue("error", "shot", sh.get("id"),
-                                         f"dialogLineRefs 超範圍（場次只有 {len(dlg)} 句）：" + "、".join(map(str, bad)),
-                                         f"第 {sh.get('no')} 鏡"))
-                covered |= {n for n in refs if 1 <= n <= len(dlg)}
+                picked, source, errs = shot_dialog_lines(sh, {"es": es, "ep": ep})
+                for msg in errs:
+                    issues.append(_issue("error", "shot", sh.get("id"), msg, f"第 {sh.get('no')} 鏡"))
+                covered |= {n for n, _ in picked}
             missing = [i for i in range(1, len(dlg) + 1) if i not in covered]
             if dlg and missing:
                 issues.append(_issue("error", "episodeScene", es.get("id"),

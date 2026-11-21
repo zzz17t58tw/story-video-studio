@@ -185,6 +185,109 @@ def blank_angle() -> dict:
     return {"h": "", "v": "", "s": ""}
 
 
+# ── M12a：鏡頭台詞引用改存 beat id（dialogBeatIds）───────────────
+# 為什麼：舊欄位 dialogLineRefs 存「所屬場次第幾句台詞（1-based）」，
+# 劇本頁在中間插／刪／搬一句，所有鏡頭的數字就集體錯位且畫面看不出來。
+# 改存 beat id 後，句子搬家引用仍跟著走；舊資料在讀檔正規化時一次換算成 id。
+def episode_scene_map(data: dict) -> dict[str, dict]:
+    """場次 id → {sceneId, episodeId, title, dialogue: [dialogue beat...]}（依劇本順序）。"""
+    out: dict[str, dict] = {}
+    for ep in ((data.get("script") or {}).get("episodes") or []):
+        if not isinstance(ep, dict):
+            continue
+        for es in (ep.get("scenes") or []):
+            if not isinstance(es, dict) or not es.get("id"):
+                continue
+            out[es["id"]] = {
+                "sceneId": es.get("sceneId") or "",
+                "episodeId": ep.get("id") or "",
+                "title": es.get("title") or es.get("id"),
+                "dialogue": [b for b in (es.get("beats") or [])
+                             if isinstance(b, dict) and b.get("type") == "dialogue" and b.get("id")],
+            }
+    return out
+
+
+def shot_dialog_beat_ids(shot: dict, data: dict) -> list[str]:
+    """**唯讀換算**：鏡頭 → 台詞 beat id（不寫回）。
+
+    優先用 dialogBeatIds；沒有才退回舊的 dialogLineRefs（場次內第 N 句台詞）。
+    回傳順序照場次劇本順序（引用順序＝台詞演出順序，前端唯讀區與音訊段都用它）。
+    """
+    es_id = shot.get("episodeSceneId")
+    dlg = (episode_scene_map(data).get(es_id) or {}).get("dialogue") or []
+    by_index = {i + 1: str(b.get("id")) for i, b in enumerate(dlg)}
+    ids = [x for x in (shot.get("dialogBeatIds") or []) if isinstance(x, str)]
+    refs = [r for r in (shot.get("dialogLineRefs") or []) if isinstance(r, int) and not isinstance(r, bool)]
+    want = set(ids) | {by_index[n] for n in refs if n in by_index}
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for b in dlg:
+        bid = str(b.get("id"))
+        if bid in want and bid not in seen:
+            seen.add(bid)
+            ordered.append(bid)
+    return ordered
+
+
+def dialog_beat_index(beat_ids: list[str], dialogue: list[dict]) -> list[int]:
+    """beat id 清單 → 該場次台詞的 1-based 序號（舊 dialogLineRefs 的寫法）。"""
+    pos = {str(b.get("id")): i + 1 for i, b in enumerate(dialogue or [])}
+    return sorted({pos[b] for b in (beat_ids or []) if b in pos})
+
+
+def migrate_dialog_linkage(data: dict) -> list[str]:
+    """就地補 dialogBeatIds：無此欄位但有 dialogLineRefs → 依場次台詞序號換算成 beat id。
+
+    為什麼寫在讀取正規化而不是 PUT：舊專案一打開就要看得到引用（鏡頭卡、驗證、編譯都靠它），
+    不能等使用者手動存一次檔。換算不到（場次不存在／序號超範圍／beat 沒有 id）時**保留舊欄位、
+    不清空、也不拋錯**，只回訊息由 API 附給前端。
+    """
+    notes: list[str] = []
+    projects = episode_scene_map(data)
+    for sh in (data.get("shots") or []):
+        if not isinstance(sh, dict):
+            continue
+        raw = sh.get("dialogBeatIds")
+        if isinstance(raw, list):
+            # 已有新欄位：只清洗型別，並用它同步舊欄位（後端舊路徑仍會讀 dialogLineRefs）
+            sh["dialogBeatIds"] = [x for x in raw if isinstance(x, str)]
+        else:
+            refs = [r for r in (sh.get("dialogLineRefs") or []) if isinstance(r, int) and not isinstance(r, bool)]
+            if not refs:
+                sh["dialogBeatIds"] = []
+                continue
+            es_id = sh.get("episodeSceneId")
+            dlg = (projects.get(es_id) or {}).get("dialogue") or []
+            if not es_id or es_id not in projects:
+                sh["dialogBeatIds"] = []
+                notes.append(f"鏡頭 {sh.get('id')} 有 dialogLineRefs 但沒有有效的所屬場次，無法換算（舊值保留）")
+                continue
+            got: list[str] = []
+            bad: list[int] = []
+            for n in refs:
+                if 1 <= n <= len(dlg) and dlg[n - 1].get("id"):
+                    got.append(str(dlg[n - 1]["id"]))
+                else:
+                    bad.append(n)
+            if bad:
+                notes.append(f"鏡頭 {sh.get('id')} 的 dialogLineRefs {bad} 在場次 {es_id} 換算不到台詞（已忽略）")
+            if not got and bad:
+                sh["dialogBeatIds"] = []
+                continue  # 一個都換算不到時不清空舊欄位，讓使用者看得到原值自己修
+            sh["dialogBeatIds"] = sorted(set(got), key=got.index)
+        # 與舊欄位同步（寫入 dialogBeatIds 時重算 dialogLineRefs）
+        es_id = sh.get("episodeSceneId")
+        if sh["dialogBeatIds"] and es_id in projects:
+            idx = dialog_beat_index(sh["dialogBeatIds"], projects[es_id]["dialogue"])
+            if idx:
+                sh["dialogLineRefs"] = idx
+                continue
+        if not isinstance(sh.get("dialogLineRefs"), list):
+            sh["dialogLineRefs"] = []
+    return notes
+
+
 def fill_project_defaults(data: dict) -> dict:
     """補 v0.2 欄位預設（就地修改並回傳同一物件）。永不拋例外、不寫檔。"""
     if not isinstance(data, dict):
@@ -257,6 +360,8 @@ def fill_project_defaults(data: dict) -> dict:
             rp.setdefault("slots", [])
             rp.setdefault("weakReferences", [])
             rp.setdefault("promptPlaceholders", {})
+    # M12a：鏡頭台詞引用（dialogLineRefs → dialogBeatIds）在讀入時換算
+    migrate_dialog_linkage(data)
     return data
 
 
@@ -398,12 +503,15 @@ def validate_project(data: object) -> list[str]:
     seen_no: set[int] = set()
     # M3c：場次 → 該場 dialogue beat 數（dialogLineRefs 上界）
     beat_count = {}
+    beat_id_map: dict[str, list[dict]] = {}
     for ep in data["script"]["episodes"]:
         if not isinstance(ep, dict):
             continue
         for es in ep.get("scenes", []) or []:
             if isinstance(es, dict) and es.get("id"):
                 beat_count[es["id"]] = len([b for b in (es.get("beats") or []) if isinstance(b, dict)])
+                beat_id_map[es["id"]] = [b for b in (es.get("beats") or [])
+                                         if isinstance(b, dict) and b.get("type") == "dialogue"]
     for shot in data["shots"]:
         if not isinstance(shot, dict):
             errors.append("shots 內每項必須是物件")
@@ -430,6 +538,21 @@ def validate_project(data: object) -> list[str]:
         refs = [r for r in (shot.get("dialogLineRefs") or []) if isinstance(r, int)]
         if len(refs) != len(set(refs)):
             errors.append(f"{where} 的 dialogLineRefs 有重複")
+        # M12a：新欄位 dialogBeatIds 必須是「所屬場次」存在的台詞 beat id（能存就存，
+        # 但指向別場／已刪除的句子要報出來——那是引用失效，不是資料缺欄位）
+        beat_ids = shot.get("dialogBeatIds")
+        if beat_ids is not None:
+            if not isinstance(beat_ids, list):
+                errors.append(f"{where} 的 dialogBeatIds 必須是陣列")
+            else:
+                allowed = {str(b.get("id")) for b in (beat_id_map.get(shot.get("episodeSceneId")) or [])}
+                all_ids = {str(b.get("id")) for dl in beat_id_map.values() for b in dl}
+                for bid in beat_ids:
+                    if not isinstance(bid, str):
+                        errors.append(f"{where} 的 dialogBeatIds 含非字串值：{bid!r}")
+                    elif bid not in allowed:
+                        hint = "（屬於其他場次）" if bid in all_ids else ""
+                        errors.append(f"{where} 的 dialogBeatIds 引用了所屬場次沒有的台詞 {bid}{hint}")
         for sid in shot.get("stageIds") or []:
             if not isinstance(sid, str) or ":" not in sid or sid.split(":", 1)[0] not in char_ids:
                 errors.append(f"{where} 的 stageIds 不合法：{sid!r}（格式 c01:s1，角色必須存在）")
@@ -540,7 +663,19 @@ def load_project(slug: str) -> dict:
         raise StorageError(f"找不到專案：{slug}")
     data = _read_json(path)
     # M3c：舊專案缺 v0.2 欄位時在記憶體補預設（不寫回，除非使用者另存）
-    return fill_project_defaults(data)
+    before = {sh.get("id"): (sh.get("dialogBeatIds") is not None)
+              for sh in (data.get("shots") or []) if isinstance(sh, dict)}
+    notes = fill_project_defaults_notes(data)
+    data["_dialogMigration"] = {
+        "applied": [sid for sid, had in before.items() if not had],
+        "notes": notes,
+    }
+    return data
+
+
+def fill_project_defaults_notes(data: dict) -> list[str]:
+    """fill_project_defaults 的旁註版：回台詞引用遷移過程中換算不到的訊息（給前端提示用）。"""
+    return migrate_dialog_linkage(data)
 
 
 def save_project(slug: str, data: dict) -> dict:
@@ -551,8 +686,12 @@ def save_project(slug: str, data: dict) -> dict:
     meta = data.get("meta")
     if not isinstance(meta, dict):
         raise StorageError("缺少 meta")
+    data.pop("_dialogMigration", None)  # 讀取時附給前端的遷移訊息，不寫回檔
     meta["slug"] = slug  # 不讓 body 把 slug 改掉（避免目錄與 slug 分岔）
     strip_llm_api_key(data)  # M3b：API key 永遠不進 project.json
+    # M12a：先把台詞引用正規化（換算／同步 dialogLineRefs），再驗證——
+    # 否則只帶舊欄位或只帶新欄位的前端版本會撞到不一致的引用而 400。
+    migrate_dialog_linkage(data)
     errors = validate_project(data)
     if errors:
         raise StorageError("；".join(errors))
