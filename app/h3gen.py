@@ -45,7 +45,7 @@ from typing import Any
 
 import httpx
 
-from . import comfy, gpu as gpulib, imagegen, storage, paths
+from . import comfy, gpu as gpulib, imagegen, storage, paths, promptrules
 
 ROOT = paths.TEMPLATES_DIR.parent
 TEMPLATE = paths.TEMPLATES_DIR / "h3_director_r2v.ui.json"
@@ -93,6 +93,12 @@ MAX_WAIT = 600.0
 H3_NEED_VRAM_MB = 15000
 
 _PIC_RE = re.compile(r"<Picture\s+(\d+)>")
+
+
+def _h3compose():
+    """延遲取得 h3compose（promptrules → h3compose、h3gen → promptrules，模組層互相 import 時序不定）。"""
+    from . import h3compose
+    return h3compose
 
 _ASPECT = {"9:16": (9, 16), "16:9": (16, 9), "1:1": (1, 1), "4:3": (4, 3), "3:4": (3, 4),
            "3:2": (3, 2), "2:3": (2, 3), "21:9": (21, 9)}
@@ -284,6 +290,55 @@ def check_lora_stack(rows: list[dict]) -> list[str]:
     return out
 
 
+def _used_pictures(prompt: str) -> list[int]:
+    return sorted({int(m.group(1)) for m in _PIC_RE.finditer(prompt)})
+
+
+def _sendable_ordinals(refs: list[dict], notes: dict) -> list[int]:
+    """這次送件時「<Picture N> 的 N 可以是哪些值」——這個集合必須跟下方的改編號邏輯一致。
+
+    · 一般：每個 ordinal ≥1 的參考圖都送得出，N 就是它的 ordinal（送件序號不同，但下方會 remap）。
+    · 首幀當 <Picture 1>：只有 1 號（其他槽位這次沒送）。
+    """
+    if notes.get("firstFrameAsPicture"):
+        return [1]
+    return sorted({int(r["ordinal"]) for r in refs if r.get("ordinal") is not None and int(r["ordinal"]) >= 1})
+
+
+def _pick_prompt(project: dict, shot: dict, sendable: list[int]) -> tuple[str, list[str], str, list[str]]:
+    """決定這次要送出的提示詞（M12b：送件口硬驗）。
+
+    規則是 promptEn 合格就用它；不合格（或空白）就改用 app/h3compose.py 的模板編譯結果。
+    **一律不寫回 project.json**（送件口不偷改使用者的資料）。
+    回 (prompt, warnings, promptSource, problems)；promptSource ∈ {"promptEn", "compiled"}。
+    """
+    warnings: list[str] = []
+    raw = _s(shot.get("promptEn"))
+    ctx = {"slots": sendable}
+    if raw:
+        ok, problems, notes = promptrules.check("h3_video", raw, ctx)
+        if notes:
+            warnings.extend(notes)
+        if ok:
+            return raw, warnings, "promptEn", []
+        why = "、".join(problems) if problems else "格式不符"
+        compiled, cw, _meta = _h3compose().compile_prompt(project, shot)
+        compiled = _s(compiled)
+        if compiled:
+            warnings.append(f"promptEn 未符合 H3 官方規則（缺：{why}），已改用模板編譯"
+                            "（app/h3compose.py 六段式＋<Picture N>，未寫回 project.json）")
+            return compiled, warnings + list(cw), "compiled", problems
+        raise H3GenError("這鏡的 promptEn 未符合 H3 官方規則（缺：" + why
+                         + "），而且模板編譯也組不出提示詞：請先補人物卡／場景卡或按「⌘ 模板編譯 prompt」")
+    compiled, cw, _meta = _h3compose().compile_prompt(project, shot)
+    compiled = _s(compiled)
+    if not compiled:
+        raise H3GenError("這鏡沒有提示詞（promptEn 空）：請先寫提示詞或按「⌘ 模板編譯 prompt」")
+    warnings.extend(cw)
+    warnings.append("這鏡 promptEn 是空的，已改用「模板編譯」的即時結果（未寫回 project.json）")
+    return compiled, warnings, "compiled", ["promptEn 是空的"]
+
+
 def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
     """組導演台 r2v timeline（還沒送件、還沒上傳圖）。
 
@@ -300,16 +355,6 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
     """
     opts = opts or {}
     warnings: list[str] = []
-    prompt = _s(shot.get("promptEn"))
-    if not prompt:
-        from . import h3compose
-        prompt, cw, _meta = h3compose.compile_prompt(project, shot)
-        prompt = _s(prompt)
-        warnings.extend(cw)
-        if prompt:
-            warnings.append("這鏡 promptEn 是空的，已改用「模板編譯」的即時結果（未寫回 project.json）")
-    if not prompt:
-        raise H3GenError("這鏡沒有提示詞（promptEn 空）：請先寫提示詞或按「⌘ 模板編譯 prompt」")
 
     aspect = _s(opts.get("aspect")) or _s((project.get("meta") or {}).get("aspectRatio")) or "9:16"
     dw, dh = size_for_aspect(aspect)
@@ -322,6 +367,14 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
 
     refs, w, notes = collect_refs(project, shot, allow_first_frame=bool(opts.get("useFirstFrame", True)))
     warnings.extend(w)
+
+    # M12b：先知道「這次送得出哪些槽位」，再用 app/promptrules.py 決定要送哪一份提示詞。
+    # promptEn 合格 → 原樣送；不合格（缺六段／<Picture N> 對不上／沒有 <Picture）→ 改用
+    # h3compose.compile_prompt 的即時結果，並在 warnings 寫清楚缺什麼（不寫回 project.json）。
+    sendable = _sendable_ordinals(refs, notes)
+    prompt, pw, prompt_source, prompt_problems = _pick_prompt(project, shot, sendable)
+    warnings.extend(pw)
+
     ordinals = [r["ordinal"] for r in refs]
     used = sorted({int(m.group(1)) for m in _PIC_RE.finditer(prompt)})
     # <Picture N> 的對應：送件序號從 1 開始，但 prompt 的 N 是「參考圖槽位序號」。
@@ -332,6 +385,7 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
         pic_map[1] = 1          # 首幀頂 <Picture 1>：prompt 裡的 1 照字面就是指「這個主體」
     bad_pics = [n for n in used if n not in pic_map]
     if bad_pics:
+        # 這裡只會剩「模板編譯後仍對不上」的殘餘（合格 promptEn 已在 promptrules.check 擋過一次）
         warnings.append("提示詞引用了 " + "、".join(f"<Picture {n}>" for n in bad_pics)
                         + f"，但這次只送得出 {sorted(pic_map)} 號槽位：這些引用會保持原樣（模型會忽略）")
     if notes.get("firstFrameAsPicture"):
@@ -435,6 +489,8 @@ def build_timeline(project: dict, shot: dict, opts: dict | None = None) -> dict:
             "refs": [{"ordinal": r["ordinal"], "sendIndex": r["sendIndex"], "id": r["id"],
                       "kind": r["kind"], "path": r["path"]} for r in refs],
             "startImage": first, "promptChars": len(prompt), "picturesUsed": used,
+            "promptRule": "h3_video", "promptSource": prompt_source,
+            "promptProblems": list(prompt_problems),
             "picMap": pic_map, "skippedPlaceholders": notes.get("skipped") or [],
             "firstFrameAsPicture": int(notes.get("firstFrameAsPicture") or 0),
             "loras": copy.deepcopy(seg_loras),
@@ -999,6 +1055,9 @@ def _run_inner(job_id: str, slug: str, shot_id: str, opts: dict, t_all: float) -
         info = sub["info"]
         meta = info.get("meta") or {}
         _set(job, pid=sub["pid"], phase="ComfyUI 生成中…", warnings=info.get("warnings") or [],
+             promptRule=meta.get("promptRule") or "h3_video",
+             promptSource=meta.get("promptSource") or "",
+             promptProblems=meta.get("promptProblems") or [],
              frames=meta.get("frames"), width=meta.get("width"), height=meta.get("height"),
              steps=info.get("steps"), seed=info.get("seed"), loras=info.get("loras") or [],
              cfg=info.get("cfg"), shiftVideo=info.get("shiftVideo"), shiftAudio=info.get("shiftAudio"),

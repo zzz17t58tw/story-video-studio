@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen
+from . import comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen, promptrules
 from . import gpu
 from . import assemble as asm
 from . import paths
@@ -675,6 +675,65 @@ def api_preview_moss_caption(slug: str, shot_id: str):
         return _fail(400, f"組 caption 失敗：{type(e).__name__}: {e}")
     return {"ok": True, "slug": slug, "shotId": shot_id, "caption": caption,
             "chars": len(caption), "warnings": warnings}
+
+
+@app.get("/api/prompt-rules")
+def api_prompt_rules():
+    """M12b：所有生成引擎的官方提示詞規則卡（純讀；前端顯示「規則：<label>」與規則條列）。"""
+    return {"ok": True, "rules": promptrules.describe(), "engines": list(promptrules.RULES)}
+
+
+@app.get("/api/projects/{slug}/shots/{shot_id}/prompt-preview")
+def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video")):
+    """M12b：預覽「這次真的會送出的提示詞」＋規則驗證結果（純讀、不碰 GPU、不寫檔）。
+
+    engine：h3_video（H3 影片六段式）｜moss_t2i（MOSS caption）｜qwen_image（Qwen 官方槽位）。
+    h3_video 依 h3gen.build_timeline 的同一套規則選稿（promptEn 合格 → promptEn；否則模板編譯），
+    所以這裡看到的就是按「生影片」時模型會收到的字。
+    """
+    data, err = _load_for_m3d(slug)
+    if err:
+        return err
+    shot = _get_shot(data, shot_id)
+    if shot is None:
+        return _fail(404, f"找不到鏡頭 {shot_id}")
+    eng = promptrules._norm(engine)
+    rule = promptrules.rule_of(eng)
+    if rule is None:
+        return _fail(400, f"不認得的引擎 {engine}（合法值：{'／'.join(promptrules.RULES)}）")
+    warnings: list[str] = []
+    problems: list[str] = []
+    notes: list[str] = []
+    source = "promptEn"
+    # 預覽一律要能看到「真的會送出去的字」，所以任何一段失敗都要退回組稿而不是回空字串。
+    if eng == "h3_video":
+        ref_problems: list[str] = []
+        try:
+            refs, w, ref_notes = h3gen.collect_refs(data, shot)
+            warnings.extend(w)
+            sendable = h3gen._sendable_ordinals(refs, ref_notes)
+        except Exception as e:  # noqa: BLE001 — 通常是「一個可用的參考圖都沒有」
+            ref_problems.append(str(e))
+            sendable = [s["ordinal"] for s in (shot.get("referencePlan") or {}).get("slots") or []
+                        if isinstance(s, dict) and s.get("ordinal")]
+        prompt, pw, source, problems = h3gen._pick_prompt(data, shot, sendable)
+        warnings.extend(pw)
+        problems = ref_problems + list(problems)
+        ok = not problems
+    elif eng == "moss_t2i":
+        prompt, warnings = imagegen.build_moss_caption(data, shot)
+        ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot))
+    else:
+        refs, w = imagegen.collect_refs(data, shot)
+        warnings.extend(w)
+        prompt, w2 = imagegen.build_prompt(data, shot, refs)
+        warnings.extend(w2)
+        ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot, refs=refs))
+        source = "build_prompt"
+    return {"ok": ok, "engine": eng, "ruleId": rule["id"], "label": rule["label"],
+            "source": rule["source"], "rulesZh": rule["rulesZh"], "prompt": prompt,
+            "promptSource": source, "warnings": warnings, "problems": problems, "notes": notes,
+            "chars": len(prompt)}
 
 
 @app.get("/api/projects/{slug}/characters/{cid}/caption/moss")

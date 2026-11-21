@@ -30,7 +30,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import comfy, gpu, h3compose, storage, paths
+from . import comfy, gpu, h3compose, storage, paths, promptrules
 
 ROOT = paths.TEMPLATES_DIR.parent
 TEMPLATE_I2I = paths.TEMPLATES_DIR / "qwen21_i2i_edit.api.json"
@@ -375,13 +375,27 @@ def build_prompt(project: dict, shot: dict, refs: list[dict]) -> tuple[str, list
     if has_pic_refs:
         bad = [n for n in pic_refs if n not in mapping]
         if bad:
+            # M12b：規則只在 app/promptrules.py 寫一份；這裡只借用它把「缺什麼」講成中文
+            _ok, problems, _notes = promptrules.check("qwen_image", base, {
+                "refsCount": len(refs), "mode": "ref" if refs else "t2i",
+                "slotOrdinals": list(mapping)})
+            alt = ("參照補救：" + "；".join(problems)) if problems else ""
             raise ImageGenError(
                 f"提示詞引用了 {', '.join(f'<Picture {n}>' for n in bad)}，但這次只送 {len(refs)} 張參考圖"
                 f"（對應的槽位{'已超上限被略過' if len(refs) >= MAX_REF_IMAGES else '沒有圖／檔案不存在'}）："
-                "請按「▣ 建參考圖槽位」修正槽位，或「⌘ 模板編譯 prompt」重編提示詞後再試（硬送會讓模型認錯主體）")
+                "請按「▣ 建參考圖槽位」修正槽位，或「⌘ 模板編譯 prompt」重編提示詞後再試（硬送會讓模型認錯主體）"
+                + (f"（Qwen 官方規則：{alt}）" if alt else ""))
         prompt = _PIC_RE.sub(lambda m: f"<image{mapping[int(m.group(1))]}>", base).strip()
     else:
         prompt = base
+    # M12b：送件前硬驗（Qwen 官方槽位規則）——不合格就擋，不默默送進模型
+    ok, problems, notes = promptrules.check("qwen_image", prompt, {
+        "refsCount": len(refs), "mode": "ref" if refs else "t2i",
+        "slotOrdinals": list(mapping)})
+    warnings.extend(notes)
+    if not ok:
+        raise ImageGenError("提示詞未符合 Qwen Image 2.1 官方規則，已擋下（沒有送 GPU）：\n- "
+                            + "\n- ".join(problems))
 
     if not refs:
         warnings.append("這次沒有送任何參考圖（i2i 會失敗；若要純文字生圖請選 t2i）")
@@ -1089,6 +1103,16 @@ def _generate_moss_image_impl(project: dict, shot: dict, opts: dict) -> dict:
     warnings.extend(cw)
     if not caption:
         raise ImageGenError("這鏡組不出 MOSS caption（人物卡與場景卡都是空的）：請先寫 promptZh 或補人物/場景設定")
+    # M12b：送件前硬驗 MOSS 官方 caption 規則（連續英文、不編號、禁 quality tag、不含 <Picture、
+    # 尺寸不進 caption）——硬性違規就擋；錨點沒逐字／caption 偏長只警告（實測幾乎都會超長，
+    # 而且特寫鏡頭組稿刻意不放臉部錨點，擋下來等於整個引擎不能用）。
+    _ok, problems, notes = promptrules.check("moss_t2i", caption,
+                                             promptrules.ctx_for("moss_t2i", project, shot))
+    warnings.extend(notes)
+    if not problems and not _ok:
+        problems = ["caption 不符合 MOSS 官方標題格式"]
+    if problems:
+        raise ImageGenError("MOSS caption 未符合官方規則，已擋下（沒有送 GPU）：\n- " + "\n- ".join(problems))
 
     try:
         seed = int(opts.get("seed")) if opts.get("seed") not in (None, "") else random.randint(0, 2 ** 31 - 1)
