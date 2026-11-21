@@ -15,6 +15,7 @@ const state = {
   dirty: false,
   validateResult: null,  // M3d：最近一次 /validate 的結果（null＝面板收起）
   dialogMigrationNotes: [],  // M12a：舊台詞引用換算失敗的訊息（後端讀檔時附）
+  dataDir: "",        // /api/health 回報的實際資料夾（frozen 時在 exe 旁，不能寫死 projects/）
 };
 
 // ── 小工具 ───────────────────────────────────────────────
@@ -89,6 +90,24 @@ async function saveNow() {
 }
 
 // ── 專案列表 ─────────────────────────────────────────────
+// 資料夾實際位置由後端決定（frozen 時在 exe 旁、也可用 --data-dir 換），前端不要自己猜。
+async function loadHealth() {
+  try {
+    const res = await api("/api/health");
+    if (res && res.paths && res.paths.data) {
+      state.dataDir = String(res.paths.data).replace(/\\/g, "/").replace(/\/+$/, "");
+      renderMetaLine();
+    }
+  } catch (_) { /* health 拿不到不影響使用 */ }
+}
+
+function renderMetaLine() {
+  const p = state.project;
+  const line = $("#project-meta-line");
+  if (!line) return;   // init 期間 DOM 還沒好時直接跳過，不要讓呼叫端炸掉
+  line.textContent = p ? `資料：${state.dataDir ? state.dataDir + "/" : ""}${p.meta.slug}/project.json` : "";
+}
+
 async function loadProjectList() {
   try {
     const res = await api("/api/projects");
@@ -1301,7 +1320,7 @@ function characterSheetCard() {
   });
   card.append(el("label", { class: "field" }, el("span", { text: "要生立繪的人物（可多選；Ctrl／Shift 多選）" }), sel));
   card.append(el("div", { class: "row wrap" }, btn, el("span", { class: "spacer" }), status));
-  card.append(el("p", { class: "hint", text: "立繪＝正面全身、中性淺灰背景、完整服裝、臉部清楚（第三個人依設定保持帽影不可辨）。寫入 media/characters/<id>_sheet_<時間>.png。" }));
+  card.append(el("p", { class: "hint", text: "立繪＝正面全身、中性淺灰背景、完整服裝、臉部清楚（不要遮住臉或戴帽：H3 要靠這張臉鎖定角色）。寫入 media/characters/<id>_sheet_<時間>.png。" }));
   card.append(list);
   return card;
 }
@@ -4822,7 +4841,7 @@ function renderViews() {
   const p = state.project;
   $("#current-project-name").textContent = p ? p.meta.name : "請選擇專案";
   $("#current-project-slug").textContent = p ? `（${p.meta.slug} · ${p.meta.aspectRatio} · ${p.meta.fps}fps）` : "";
-  $("#project-meta-line").textContent = p ? `資料：projects/${p.meta.slug}/project.json` : "";
+  $("#project-meta-line") && renderMetaLine();
 
   renderStory();
   renderCharacters();
@@ -6554,12 +6573,12 @@ async function sendChat() {
   renderChatLog();
   chatState.pending = true;
   const log = document.getElementById("chat-log");
-  const waitText = el("div", { class: "bubble-text", text: "模型思考中…（本機模型可能要幾分鐘，請勿關閉）" });
+  const waitText = el("div", { class: "bubble-text", text: "模型思考中…（可能要幾分鐘，請勿關閉）" });
   const waiting = el("div", { class: "bubble assistant pending" }, waitText);
   const waitT0 = Date.now();
   const waitTimer = setInterval(() => {
     const secs = Math.round((Date.now() - waitT0) / 1000);
-    waitText.textContent = `模型運算中… 已等 ${secs} 秒（本機模型可能要幾分鐘，請勿關閉視窗）`;
+    waitText.textContent = `模型運算中… 已等 ${secs} 秒（可能要幾分鐘，請勿關閉視窗）`;
   }, 1000);
   log.append(waiting);
   log.scrollTop = log.scrollHeight;
@@ -6819,6 +6838,7 @@ function init() {
   window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
   renderAll();          // 先畫出「尚未選擇專案」與各分頁佔位，避免右側一片空白
   loadPromptRules();    // M12b：三個引擎的官方提示詞規則卡（後端 app/promptrules.py 是唯一真相）
+  loadHealth();         // 資料夾實際位置（frozen 時在 exe 旁，不能只寫死 projects/）
   loadProjectList();
   setSaveStatus("idle", "尚未載入");
   bindLightbox();

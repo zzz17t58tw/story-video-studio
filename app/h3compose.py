@@ -700,12 +700,58 @@ def validate_project(data: dict) -> dict:
                 issues.append(_issue("error", "character", ch.get("id"),
                                      f"colorAnchors.{k}「{v}」不是 #RRGGBB", ch.get("name") or ch.get("id")))
 
+    # 同一顆角色／場景在每一鏡各報一次，6 鏡專案就會出現 5 條同因 warn；
+    # 使用者看到一堆重複警告反而找不到「到底缺幾張圖」。合併成「一顆角色一筆、
+    # 附被哪些鏡頭用到」，其餘 issue 原樣保留、順序不變。
+    issues = _merge_missing_ref_issues(issues)
+
     counts = {"error": sum(1 for i in issues if i["level"] == "error"),
               "warn": sum(1 for i in issues if i["level"] == "warn")}
     return {"issues": issues, "counts": counts,
             "checked": {"shots": len(data.get("shots") or []), "scenes": len(scenes),
                         "characters": len(chars), "fps": fps},
             "at": _now()}
+
+
+def _merge_missing_ref_issues(issues: list[dict]) -> list[dict]:
+    """把「角色／場景沒有參考圖」的逐鏡重複 warn 併成一筆。
+
+    不直接用 targetId 當鍵：targetId 是「哪一鏡」，真正的重複來源是同一顆角色／場景。
+    """
+    merged: dict[str, dict] = {}
+    out: list[dict] = []
+    for it in issues:
+        msg = _s(it.get("message"))
+        is_missing = (it.get("level") == "warn" and it.get("scope") == "shot"
+                      and (msg.endswith("→ 送 H3 時是 weak reference")
+                           or msg.endswith("→ 場景一致性只能靠文字")))
+        if is_missing:
+            key = _missing_ref_key(msg)
+            if key not in merged:
+                copy = dict(it)
+                copy["_msgs"] = [msg]
+                copy["_shots"] = [it.get("name") or ""]
+                merged[key] = copy
+                out.append(copy)
+            else:
+                merged[key]["_msgs"].append(msg)
+                merged[key]["_shots"].append(it.get("name") or "")
+        else:
+            out.append(it)
+    for copy in merged.values():
+        names = [n for n in dict.fromkeys(copy.pop("_shots", [])) if n]
+        uniq = list(dict.fromkeys(copy.pop("_msgs", [])))
+        base = uniq[0] if uniq else _s(copy.get("message"))
+        if len(names) > 1:
+            base += f"（被 {'、'.join(names)} 用到）"
+        copy["message"] = base
+    return out
+
+
+def _missing_ref_key(msg: str) -> str:
+    """從「角色 c01（阿哲）沒有參考圖 → …」抽出 `角色:c01` 當合併鍵。"""
+    m = re.search(r"(角色|場景)\s+([A-Za-z0-9_:-]+)", msg)
+    return f"{m.group(1)}:{m.group(2)}" if m else msg
 
 
 def _now() -> str:
