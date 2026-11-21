@@ -1480,7 +1480,8 @@ function esLabel(es) {
 // 為什麼要一套共用函式：鏡頭卡、劇本頁、檢查面板都要用「同一份真相」回答
 // 「這一句台詞被哪些鏡頭引用」，各自算一次會出現兩頁對不上（就是這次要修的症狀）。
 function esDialogueBeats(es) {
-  return ((es && es.beats) || []).filter((b) => b && b.type !== "action" && b.id);
+  // _skipped 是「整份覆寫時保留的舊項」：不進生成、也不能出現在引用清單裡
+  return ((es && es.beats) || []).filter((b) => b && b.type !== "action" && b.id && !b._skipped);
 }
 // 鏡頭 → 台詞 beat id 清單。新欄位優先；舊資料（只有 dialogLineRefs）在這裡即時換算，
 // 舊專案就算沒經過後端遷移也能顯示（後端讀取時已補上，這是第二層保險）。
@@ -1760,15 +1761,36 @@ function sceneBlock(ep, es, idx) {
   // beats
   if (!Array.isArray(es.beats)) es.beats = [];
   const beats = es.beats;
+  // M13a：「解析成多欄」整份覆寫時，舊項會以 _skipped 留在檔案裡（可還原、不進生成）。
+  // 畫面上必須只算「有效的」那些，否則使用者會看到同一句台詞出現兩次。
+  const liveBeats = beats.filter((b) => b && !b._skipped);
+  const deadBeats = beats.filter((b) => b && b._skipped);
   const bHead = el("div", { class: "subcard-head" },
-    el("h4", { text: `節拍 beats · ${beats.length}` }),
+    el("h4", { text: `節拍 beats · ${liveBeats.length}${deadBeats.length ? `（另有 ${deadBeats.length} 項已作廢）` : ""}` }),
     el("span", { class: "spacer" }),
     el("button", { class: "btn btn-small", type: "button", onclick: () => addBeat(es, "dialogue") }, "＋ 對白"),
     el("button", { class: "btn btn-small", type: "button", onclick: () => addBeat(es, "action") }, "＋ 動作"),
   );
   const bCard = el("div", { class: "beat-list" }, bHead);
-  if (!beats.length) bCard.append(el("p", { class: "hint", text: "尚無 beat。對白與動作都各算一個 beat，順序就是戲的節奏。" }));
-  beats.forEach((b, bi) => bCard.append(beatRow(es, b, bi)));
+  if (!liveBeats.length) bCard.append(el("p", { class: "hint", text: "尚無 beat。對白與動作都各算一個 beat，順序就是戲的節奏。" }));
+  liveBeats.forEach((b) => bCard.append(beatRow(es, b, beats.indexOf(b))));
+  if (deadBeats.length) {
+    const dead = el("details", { class: "beat-dead" },
+      el("summary", { class: "hint", text: `已作廢的 ${deadBeats.length} 項（整份覆寫時保留的舊內容，不進生成）` }));
+    deadBeats.forEach((b) => {
+      dead.append(el("div", { class: "beat-dead-row" },
+        el("span", { class: "beat-kind", text: b.type === "action" ? "動作" : "對白" }),
+        el("span", { class: "hint mono", text: b.id || "" }),
+        el("span", { class: "hint", text: (b.line || "").slice(0, 60) }),
+        el("span", { class: "spacer" }),
+        el("button", {
+          class: "btn btn-small", type: "button", title: "把這項重新啟用（回到 beats 列表）",
+          onclick: () => { delete b._skipped; markDirty(); renderScript(); },
+        }, "還原"),
+      ));
+    });
+    bCard.append(dead);
+  }
   wrap.append(bCard);
   return wrap;
 }
@@ -1850,7 +1872,7 @@ function renderScript() {
     epCard.append(el("div", { class: "card-head" },
       el("div", { class: "card-title" },
         el("h3", { text: `${ep.id} · ${ep.title || "（未命名集）"}` }),
-        el("span", { class: "hint", text: `${ep.scenes.length} 個場次 · ${ep.scenes.reduce((n, s) => n + (s.beats || []).length, 0)} 個 beats` }),
+        el("span", { class: "hint", text: `${ep.scenes.length} 個場次 · ${ep.scenes.reduce((n, s) => n + (s.beats || []).filter((b) => b && !b._skipped).length, 0)} 個 beats` }),
       ),
       el("span", { class: "spacer" }),
       el("button", { class: "btn btn-small btn-primary", type: "button", onclick: () => addSceneToEpisode(ep) }, "＋ 新增場次"),
@@ -4636,8 +4658,26 @@ function shotDialogueFields(sh) {
     const who = d.characterId ? charNameById(d.characterId) : `對白 ${i + 1}`;
     const txt = (d.line || "").trim();
     const short = txt.length > 10 ? txt.slice(0, 10) + "…" : txt;
-    return [`dialogue.${i}.line`, `${who} 的台詞（${short || "空"}）`];
+    return [`dialogue.${i}.line`, `本鏡台詞 ${i + 1}（${who}：${short || "空"}）`];
   });
+}
+
+// 章回：每回的標題／正文各一格（章回正文存在 content，body 是同義別名）
+function chapterFields(story) {
+  return ((story && story.chapters) || []).map((ch, i) => {
+    const head = `${ch.id || `第 ${i + 1} 回`}${ch.title ? " " + ch.title : ""}`;
+    return [
+      [`chapters.${i}.title`, `章回標題 · ${head}`],
+      [`chapters.${i}.body`, `章回正文 · ${head}`],
+    ];
+  }).flat();
+}
+
+function outfitFields(ch) {
+  return ((ch && ch.outfits) || []).map((o, i) => [
+    [`outfits.${i}.desc`, `第 ${i + 1} 套服裝描述（${o.name || o.id || "未命名"}）`],
+    [`outfits.${i}.promptEn`, `第 ${i + 1} 套服裝 promptEn（${o.name || o.id || "未命名"}）`],
+  ]).flat();
 }
 
 const APPLY_FIELDS = {
@@ -4690,14 +4730,67 @@ const APPLY_FIELDS = {
   ],
 };
 
-// 某個 target 實際可套用的欄位（shot 會動態加 dialogue.N.line）
+// ── M13a：多欄套用 ─────────────────────────────────────────
+// 每個對象的「結構格子」：整份陣列（一次寫入）＋ 陣列內的單項欄位。
+// multi:true 表示值是多行結構（textarea 大一點）；parse 表示「解析成多欄」預設勾這個。
+const MULTI_APPLY_FIELDS = {
+  story: () => [
+    {
+      path: "chapters", label: "整份章回（回覆是「第 N 回　標題」一段一段時用這個）",
+      kind: "chapters", multi: true, mode: "replace", parse: true,
+      hint: "每回會自動編 ch01、ch02…；「第一章」「第 1 回」「第2章」都認得。",
+    },
+    {
+      path: "style", label: "風格四項（類型／基調／視覺風格／負向，一起寫）",
+      kind: "style", multi: true, mode: "replace", parse: true,
+      hint: "一行一項：「類型：奇幻冒險」「基調：壓抑」「視覺風格：寫實」「負向提示：卡通」。",
+    },
+  ],
+  character: () => [
+    {
+      path: "background", label: "身世四欄（出身／個性／目標／秘密，一起寫）",
+      kind: "background", multi: true, mode: "replace", parse: true,
+      hint: "一行一項：「出身：…」「個性：…」「目標：…」「秘密：…」。",
+    },
+    {
+      path: "outfits", label: "整份服裝（回覆是一套套服裝時用這個）",
+      kind: "outfits", multi: true, mode: "replace", parse: true,
+      hint: "會取代現有服裝；一行一項「名稱：…」「描述：…」「英文 prompt：…」。",
+    },
+  ],
+  episodeScene: () => [
+    {
+      path: "beats", label: "整場台詞／動作（beats）",
+      kind: "beats", multi: true, mode: "replace", parse: true,
+      hint: "「角色名：台詞」→ 一句一個 beat（角色名自動對到人物 id）；「（動作：…）」→ 動作 beat。",
+    },
+  ],
+  shot: () => [
+    {
+      path: "dialogue", label: "本鏡對白（dialogue，整份）",
+      kind: "dialogue", multi: true, mode: "replace", parse: true,
+      hint: "「角色名：台詞」一行一句。",
+    },
+  ],
+  beat: () => [],
+  scene: () => [],
+};
+
+// 某個 target 實際可套用的欄位（shot 會動態加 dialogue.N.line、章回與服裝逐項）
 function applyFieldsFor(t) {
   const base = (APPLY_FIELDS[t.kind] || []).slice();
-  if (t.kind === "shot") {
-    const sh = chatTargetData(t);
-    if (sh) base.push(...shotDialogueFields(sh));
-  }
+  const obj = chatTargetData(t);
+  if (t.kind === "shot" && obj) base.push(...shotDialogueFields(obj));
+  if (t.kind === "story" && obj) base.unshift(...chapterFields(obj));
+  if (t.kind === "character" && obj) base.push(...outfitFields(obj));
   return base;
+}
+
+function multiApplyFieldsFor(t) {
+  const fn = MULTI_APPLY_FIELDS[t && t.kind];
+  if (!fn) return [];
+  const obj = chatTargetData(t);
+  return fn(t, obj) || [];
 }
 
 const chatState = {
@@ -4920,6 +5013,25 @@ function renderChatTasks() {
     btn.dataset.task = task.id;
     box.append(btn);
   }
+  // M13a：把「多欄套用」的入口寫在任務列，使用者不用先找到那顆小鈕
+  const tweakables = multiApplyFieldsFor(t);
+  if (tweakables.length) {
+    const lastAssistant = chatState.messages.map((m, i) => [m, i]).filter(([m]) => m.role === "assistant" && !(m.meta && m.meta.error)).pop();
+    box.append(el("button", {
+      class: "chip chip-multi", type: "button",
+      title: "把最近一段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
+      onclick: () => {
+        const idx = lastAssistant ? lastAssistant[1] : -1;
+        if (idx < 0) { setSaveStatus("error", "還沒有模型回覆可以解析（先送一個任務）"); return; }
+        const bubble = bubbleElByIndex(chatState.messages.slice(0, idx + 1).filter((m) => m.role === "assistant").length - 1);
+        if (!bubble) { setSaveStatus("error", "還找不到回覆框，請先送一次訊息"); return; }
+        const host = bubble.querySelector(".ma-host");
+        if (!host) return;
+        if (!host.childElementCount) renderMultiPanel(host, idx);
+        host.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      },
+    }, "⇣ 解析成多欄適用欄位"));
+  }
   // 章回數量的快速選項（只有故事卡有）
   if (t.kind === "story" && state.project && (state.project.story.chapters || []).length) {
     box.append(el("span", { class: "hint", text: "（直接按會覆蓋輸入框內容）" }));
@@ -4951,6 +5063,26 @@ function renderChatLog() {
       el("span", { class: "hint", text: m.meta ? `${m.meta.model || ""}${m.meta.tokens ? ` · ${m.meta.tokens} tokens` : ""}` : "" }),
     );
     const acts = el("div", { class: "bubble-actions" });
+    const multi = el("div", { class: "ma-host" });
+    acts.append(el("button", {
+      class: "btn btn-small", type: "button",
+      title: "把這段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
+      onclick: () => {
+        try {
+          // 選取文字要在 onclick 最前面取一次：按鈕按下的那一下瀏覽器會收掉選取範圍
+          const selNow = replySelectionFor(bubbleElByIndex(idx)) || cachedSelectionFor(idx);
+          renderMultiPanel(multi, idx, selNow);
+        } catch (e) {
+          multi.textContent = "";
+          multi.append(el("div", { class: "error", text: `多欄套用面板開不起來：${e.message}` }));
+        }
+        if (!multi.childElementCount) return;
+        const closed = !!multi.querySelector(".btn-collapse");
+        multi.append(el("div", { class: "ma-actions ma-foot" },
+          el("button", { class: "btn btn-small btn-collapse", type: "button", onclick: () => { multi.textContent = ""; } }, "收起")));
+        if (closed) multi.querySelector(".ma-foot").remove();
+      },
+    }, "⇣ 解析成多欄"));
     acts.append(el("button", {
       class: "btn btn-small", type: "button",
       onclick: async (ev) => {
@@ -4966,7 +5098,7 @@ function renderChatLog() {
       },
     }, "複製"));
     acts.append(applyControls(idx, m));
-    wrap.append(meta, acts);
+    wrap.append(meta, acts, multi);
     log.append(wrap);
   });
   log.scrollTop = log.scrollHeight;
@@ -5058,6 +5190,662 @@ function syncTargetFromServer(after) {
   renderViews();
   const ta = document.getElementById("chat-input");
   if (ta && chatState.open) ta.focus();
+}
+
+// ══════════════════════════════════════════════════════════
+// M13a：「解析成多欄」＋「多欄套用」
+// 為什麼：模型一次回一份完整結構（三回正文、整場台詞、身世四欄、風格四項），
+// 舊的回填只能一次貼一格 → 使用者要自己複製四次，回填形同虛設。
+// 這裡把一段回覆解析成「一格一格」的結構，先顯示成可編輯清單，確認後一次打
+// POST /chat/apply-batch（後端一次讀檔、驗完整批、原子寫檔一次）。
+// 解析規則只放在前端（後端只負責驗證與寫入）。純函式、不碰 DOM，方便直接測。
+// ══════════════════════════════════════════════════════════
+
+const CN_DIGITS = { 零: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+function cnNumber(s) {
+  const t = String(s || "").trim();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  if (!t) return NaN;
+  if (t === "十") return 10;
+  const m = t.match(/^([零一二兩三四五六七八九])?十([零一二兩三四五六七八九])?$/);
+  if (m) return (m[1] ? CN_DIGITS[m[1]] : 1) * 10 + (m[2] ? CN_DIGITS[m[2]] : 0);
+  if (t.length === 1 && t in CN_DIGITS) return CN_DIGITS[t];
+  return NaN;
+}
+
+// 模型很愛包 ``` 或說「以下是…」→ 去掉外框，只留正文
+function stripChatWrapper(text) {
+  let s = String(text || "").replace(/\r\n?/g, "\n").trim();
+  const fence = s.match(/```[a-zA-Z]*\n?([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+  return s;
+}
+
+function looksLikeJson(text) {
+  const s = stripChatWrapper(text).trim();
+  if (!/^[[{]/.test(s)) return false;
+  try { JSON.parse(s); return true; } catch (_) { return false; }
+}
+
+// 「標籤：值」行（也認「**標籤**：值」「- 標籤: 值」「1. 標籤：值」）
+function parseLabeled(text, labels) {
+  const out = {};
+  const re = /^\s*(?:[-*•]\s*|\d+[.)、]\s*)?\*{0,2}([^：:*]{2,14}?)\*{0,2}\s*[：:]\s*(.*)$/;
+  for (const line of stripChatWrapper(text).split("\n")) {
+    const m = line.match(re);
+    if (!m) continue;
+    // 先比對完全相同的標籤，再退而求其次找「含標籤」的（「視覺風格建議」→ 視覺風格）
+    const exact = labels.filter((l) => m[1] === l);
+    const key = exact[0] || labels.filter((l) => m[1].includes(l)).sort((a, b) => b.length - a.length)[0];
+    if (!key) continue;
+    const rest = m[2].trim();
+    out[key] = out[key] ? `${out[key]}\n${rest}` : rest;
+  }
+  return out;
+}
+
+// 「第 N 回　標題」開頭分回；沒標號但有明顯多段時整段算一回
+function parseChapters(text) {
+  const s = stripChatWrapper(text);
+  const lines = s.split("\n");
+  const headRe = /^\s*(?:#{1,4}\s*)?\*{0,2}第\s*([0-9〇零一二兩三四五六七八九十百]+)\s*(回|章|話|篇)\*{0,2}(?=\s|$|[：:.、\-—])\s*[:：.、\-—]?\s*(.*)$/;
+  // 行中間才出現的「第一回」也算分回（模型偶爾把前一段和下一回寫在同一行）
+  const headReLoose = /^\s*(?:.*?[：:]\s*)?第\s*([0-9〇零一二兩三四五六七八九十百]+)\s*(回|章|話|篇)(?=\s|$|[：:.、\-—])\s*[:：.、\-—]?\s*(.*)$/;
+  const items = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(headRe) || line.match(headReLoose);   // 句中的「第二段：第一回　雨夜」也認 section
+    if (m) {
+      if (cur) items.push(cur);
+      cur = { title: `${m[3] || ""}`.replace(/\*{2,}/g, "").trim(), body: [] };
+      if (!cur.title) cur.title = `${m[2]}（未命名）`;
+      continue;
+    }
+    if (!cur) {
+      if (!line.trim()) continue;
+      cur = { title: "（未命名章回）", body: [] };
+    }
+    cur.body.push(line.replace(/\*{2,}/g, ""));
+  }
+  if (cur) items.push(cur);
+  if (items.length === 1 && !items[0].title) items[0].title = "（未命名章回）";
+  return items.map((it, i) => {
+    let body = it.body.join("\n").trim();
+    // 標題若在下一行（「第一章」單獨一行、標題在第二行）
+    if ((!it.title || /^(回|章|話|篇)（未命名）$/.test(it.title)) && body) {
+      const first = body.split("\n")[0].trim();
+      if (first && first.length <= 30) {
+        it.title = first;
+        body = body.split("\n").slice(1).join("\n").trim();
+      }
+    }
+    return { id: `ch${String(i + 1).padStart(2, "0")}`, title: it.title, body };
+  }).filter((c) => c.title || c.body);
+}
+
+const CHAR_TRAIT_LABELS = ["出身", "個性", "性格", "目標", "動機", "秘密"];
+const CHAR_TRAIT_KEYS = { 出身: "birth", 個性: "personality", 性格: "personality", 目標: "goal", 動機: "goal", 秘密: "secret" };
+function parseCharacterTraits(text) {
+  const got = parseLabeled(text, CHAR_TRAIT_LABELS);
+  const out = {};
+  for (const [label, val] of Object.entries(got)) {
+    const key = CHAR_TRAIT_KEYS[label];
+    if (key && val) out[key] = out[key] ? `${out[key]}\n${val}` : val;
+  }
+  return out;
+}
+
+const STYLE_LABELS = ["類型", "基調", "視覺風格", "視覺", "負向提示", "負面提示", "負向", "風格關鍵字"];
+const STYLE_KEYS = { 類型: "genre", 基調: "tone", 視覺風格: "visualStyle", 視覺: "visualStyle",
+  負向提示: "negative", 負面提示: "negative", 負向: "negative", 風格關鍵字: "keywords" };
+function parseStoryStyle(text) {
+  const got = parseLabeled(text, STYLE_LABELS);
+  const out = {};
+  for (const [label, val] of Object.entries(got)) {
+    const key = STYLE_KEYS[label];
+    if (!key || !val) continue;
+    const clean = val.replace(/^["「『]|["」』]$/g, "").trim();
+    if (key === "keywords") { out.negative = [out.negative, clean].filter(Boolean).join("，"); continue; }
+    out[key] = out[key] ? `${out[key]}，${clean}` : clean;
+  }
+  return out;
+}
+
+// 角色名：用現有人物表比對，「角色名：台詞」→ characterId；對不到就保留名字（後端存 null＋warning）
+function matchCharacterName(name, charMap) {
+  // 先去掉動作括號再比對（「艾麗絲（動作）」就是艾麗絲；「艾麗絲（主角）」也一樣）
+  const raw = String(name || "").replace(/[（(][^）)]*[）)]/g, "").trim();
+  if (!raw) return { id: null, name: raw };
+  // 打錯字（多一個字／少一個字）也算同一個人：「艾麗絲絲」→ 艾麗絲（只在唯一命中時採用）
+  const near = charMap[raw] ? null : Object.keys(charMap).filter((k) => {
+    if (!k || k.length < 2) return false;
+    const t = raw;
+    if (t.length === k.length + 1) return [...t].some((_, i) => t.slice(0, i) + t.slice(i + 1) === k);
+    if (k.length === t.length + 1) return [...k].some((_, i) => k.slice(0, i) + k.slice(i + 1) === t);
+    return false;
+  });
+  if (near && near.length === 1) return { id: charMap[near[0]], name: near[0] };
+  if (charMap[raw]) return { id: charMap[raw], name: raw };
+  // 「林旭（主角）」已經在上一步去掉括號；再試「去掉括號後包含」與全名/別名
+  const hit = Object.keys(charMap).find((k) => k && (raw.includes(k) || k.includes(raw)));
+  return hit ? { id: charMap[hit], name: hit } : { id: null, name: raw };
+}
+
+// 「角色名：台詞」「角色名（動作）：台詞」「（動作：…）」「【動作】…」
+function parseBeats(text, characters) {
+  const charMap = {};
+  for (const c of characters || []) {
+    if (c && c.name) charMap[c.name] = c.id;
+    for (const a of c && c.aliases || []) if (a) charMap[a] = c.id;
+  }
+  const names = Object.keys(charMap).sort((a, b) => b.length - a.length);
+  const items = [];
+  const warnings = [];
+  const lines = stripChatWrapper(text).split("\n");
+  for (let raw of lines) {
+    let line = raw.replace(/\*{2,}/g, "").trim();
+    if (!line) continue;
+    line = line.replace(/^\d+[.)、]\s*/, "");
+    let m = line.match(/^[（(]\s*(?:動作|action)\s*[：:]\s*(.*?)[）)]\s*$/i);
+    if (m) { items.push({ type: "action", characterId: null, line: m[1].trim(), emotion: "" }); continue; }
+    m = line.match(/^[【\[]\s*(?:動作|action)\s*[】\]]\s*[：:]?\s*(.*)$/i);
+    if (m) { items.push({ type: "action", characterId: null, line: m[1].trim(), emotion: "" }); continue; }
+    // 角色名：台詞（角色名後面可能帶動作括號）
+    const head = names.find((n) => line.startsWith(n) && /^\s*[：:]/.test(line.slice(n.length)));
+    if (head) {
+      let rest = line.slice(head.length).replace(/^\s*[：:]\s*/, "");
+      const action = [];
+      rest = rest.replace(/[（(]\s*(?:動作)?\s*[：:]?\s*([^（()）]*?)[）)]/g, (all, a) => {
+        if (a) action.push(a.trim());
+        return "";
+      });
+      if (rest.trim()) {
+        items.push({ type: "dialogue", characterId: charMap[head], name: head, line: rest.trim(), emotion: "", notes: action.join("；") });
+      } else if (action.length) {
+        items.push({ type: "action", characterId: charMap[head], name: head, line: action.join("；"), emotion: "" });
+      }
+      continue;
+    }
+    // 通用「X：Y」找不到 X 是人名 → 仍視為台詞，但標示對不到
+    const g = line.match(/^([^\s：:，。]{1,8})\s*[：:]\s*(.+)$/);
+    if (g && /[\u4e00-\u9fff]/.test(g[1])) {
+      items.push({ type: "dialogue", characterId: null, name: g[1], line: g[2].trim(), emotion: "" });
+      warnings.push(`「${g[1]}」對不到現有人物，這句會存成沒有角色的台詞`);
+      continue;
+    }
+    // 沒標角色的整行 → 動作
+    items.push({ type: "action", characterId: null, line: line, emotion: "" });
+  }
+  return { beats: items, warnings };
+}
+
+function parseDialogue(text, characters) {
+  const { beats, warnings } = parseBeats(text, characters);
+  const out = beats.filter((b) => b.line).map((b) => ({ characterId: b.characterId || null, line: b.line, _name: b.name || "" }));
+  return { dialogue: out, warnings };
+}
+
+function looksLikeBeats(text, kind) {
+  const s = stripChatWrapper(text);
+  return (kind === "beats" || kind === "dialogue") && /[：:]/.test(s) && s.split("\n").filter((l) => l.trim()).length >= 2;
+}
+
+// 統一入口：把一段回覆解析成「格子 → 值」。回 {patches, warnings, note}
+// patches: { "欄位路徑或格子 key": 值 }；kind＝MULTI_APPLY_FIELDS 的 kind
+function parseReplyIntoFields(text, kind, ctx) {
+  const c = ctx || {};
+  const src = stripChatWrapper(text);
+  const characters = c.characters || [];
+  const warn = [];
+
+  // 模型直接回 patch JSON（進階）→ 原樣採用
+  if (looksLikeJson(src)) {
+    let obj;
+    try { obj = JSON.parse(src); } catch (_) { obj = null; }
+    if (Array.isArray(obj) && (kind === "beats" || kind === "dialogue")) obj = { [kind]: obj };
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      // 常見的「物件包陣列」JSON（{"chapters": [...]}）→ 照 key 套用；
+      // 只有一個 key 而且 key 對不上這張卡時，直接拆開它（{"data": {...}}）
+      let payload = obj;
+      const keys = Object.keys(payload);
+      const sub = keys.length === 1 ? payload[keys[0]] : null;
+      if (sub && typeof sub === "object" && !Array.isArray(sub)) payload = sub;  // {"data": {...}}
+      if (keys.length === 1 && Array.isArray(sub)) payload = { [keys[0]]: sub };  // {"beats": [...]}
+      if (Object.keys(payload).length) {
+        return { patches: payload, warnings: [], note: "偵測到 JSON：直接依欄位名稱套用" };
+      }
+    }
+  }
+
+  if (kind === "chapters") {
+    const chapters = parseChapters(src);
+    const bad = [];
+    return { patches: { chapters }, warnings: warn, note: `辨識到 ${chapters.length} 回` };
+  }
+  if (kind === "style") {
+    const style = parseStoryStyle(src);
+    const n = Object.keys(style).length;
+    if (!n) warn.push("沒有辨識到「類型：」「基調：」這種標籤行");
+    return { patches: { style }, warnings: warn, note: `辨識到 ${n} 項風格` };
+  }
+  if (kind === "background") {
+    const bg = parseCharacterTraits(src);
+    const n = Object.keys(bg).length;
+    if (!n) warn.push("沒有辨識到「出身：」「個性：」這種標籤行");
+    return { patches: { background: bg }, warnings: warn, note: `辨識到 ${n} 欄身世` };
+  }
+  if (kind === "beats" || kind === "dialogue") {
+    const r = kind === "beats" ? parseBeats(src, characters) : parseDialogue(src, characters);
+    const items = kind === "beats" ? r.beats : r.dialogue;
+    if (!items.length) {
+      return { patches: { [kind]: [] }, warnings: [...(r.warnings || [])],
+        note: "沒有辨識到「角色名：台詞」（模型若回 JSON 陣列，請貼成「角色名：台詞」一行一句）" };
+    }
+    const miss = items.filter((x) => !x.characterId && x.type !== "action" && (x._name || x.name));
+    const w = [...r.warnings];
+    if (kind === "beats") {
+      for (const b of items) if (!b.characterId && b.name && b.type === "action") w.push(`動作 beat 的角色「${b.name}」對不到人物（動作不強制要角色）`);
+    }
+    return { patches: { [kind]: items }, warnings: w, note: `辨識到 ${items.length} 個${kind === "beats" ? " beat" : "對白"}${miss.length ? `，其中 ${miss.length} 個對不到人物` : ""}` };
+  }
+  if (kind === "outfits") {
+    // 只有回覆真的在講服裝時才拆；否則回空（不要把人設／身世誤當成一套服裝）
+    const clothWords = /(服裝|服飾|外套|雨衣|連帽|襯衫|裙|褲|靴|鞋|制服|披風|套裝|outfit|jacket|coat|dress)/i;
+    const desc = parseLabeled(src, ["名稱", "描述", "英文 prompt", "英文prompt", "外觀", "材質", "promptEn", "英文"]);
+    if (!Object.keys(desc).length && !clothWords.test(src)) {
+      return { patches: { outfits: [] }, warnings: [], note: "回覆裡沒有服裝相關內容" };
+    }
+    const outfit = {
+      name: desc["名稱"] || "新服裝",
+      desc: desc["描述"] || desc["外觀"] || desc["材質"] || src,
+      promptEn: desc["英文 prompt"] || desc["英文prompt"] || desc["promptEn"] || desc["英文"] || "",
+    };
+    if (!outfit.promptEn && !/[\u4e00-\u9fff]/.test(src) && /[a-zA-Z]{3}/.test(src)) outfit.promptEn = src.trim();
+    return { patches: { outfits: [outfit] }, warnings: [], note: "整段視為一套服裝（可用「名稱：」「描述：」「英文 prompt：」分行）" };
+  }
+  return { patches: {}, warnings: ["這個對象沒有可解析的結構欄位，請直接勾單一欄位套用"], note: "" };
+}
+
+// ── 多欄套用：狀態與 UI ─────────────────────────────────────
+const multiState = { msg: null, rows: [], sliders: [], previewOpen: false, busy: false };
+
+function bubbleElByIndex(idx) {
+  const log = document.getElementById("chat-log");
+  if (!log) return null;
+  return log.querySelectorAll(".bubble.assistant")[idx] || null;
+}
+
+// 使用者在氣泡裡選取過的字 → 優先用它（選取範圍＝這次要套用的內容）
+// 為什麼要有快取：按下按鈕的那一下，瀏覽器會把選取範圍收起來（selectionchange 收到 isCollapsed），
+// 等 onclick 進來才去讀 window.getSelection() 就永遠是空的（M13a 踩過）。
+// 所以在 selectionchange 時就把「剛剛在氣泡裡選了什麼」記下來，按鈕只讀快取。
+const bubbleSelCache = { idx: null, text: "", at: 0 };
+
+document.addEventListener("selectionchange", () => {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+  const text = (sel.toString() || "").trim();
+  if (!text) return;
+  const node = sel.anchorNode;
+  const el0 = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+  const bubble = el0 && el0.closest ? el0.closest(".bubble.assistant") : null;
+  if (!bubble) return;
+  const log = document.getElementById("chat-log");
+  const idx = log ? Array.prototype.indexOf.call(log.querySelectorAll(".bubble.assistant"), bubble) : -1;
+  if (idx < 0) return;
+  bubbleSelCache.idx = idx;
+  bubbleSelCache.text = text;
+  bubbleSelCache.at = Date.now();
+});
+
+function cachedSelectionFor(idx) {
+  if (bubbleSelCache.idx !== idx) return "";
+  if (Date.now() - bubbleSelCache.at > 120000) return "";
+  return bubbleSelCache.text;
+}
+
+function replySelectionFor(bubble) {
+  if (!bubble) return "";
+  const host = bubble.querySelector(".bubble-text") || bubble;
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return "";
+  const range = sel.getRangeAt(0);
+  if (!host.contains(range.commonAncestorContainer)) return "";
+  return (sel.toString() || "").trim();
+}
+
+function replyTextFor(idx) {
+  const m = chatState.messages[idx];
+  const bubble = bubbleElByIndex(idx);
+  const picked = replySelectionFor(bubble);
+  if (picked) return { text: picked, fromSelection: true };
+  return { text: (m && m.content) || "", fromSelection: false };
+}
+
+function chapterHints() {
+  return ((state.project && state.project.story && state.project.story.chapters) || []).map((c) => `${c.id} ${c.title || "（無標題）"}`);
+}
+
+// 建立某個結構格子的列（勾選框＋textarea／結構白名單）
+function buildSliderRow(spec, initialText, fromSelection) {
+  const row = el("div", { class: "ma-slider" });
+  const check = el("input", { type: "checkbox" });
+  const rowState = { spec, check, ta: null, value: null, preview: el("div", { class: "ma-preview" }),
+    parsedText: spec.parse ? initialText : null };
+  const head = el("label", { class: "ma-slider-head" },
+    check, el("span", { class: "ma-slider-label", text: spec.label }));
+  row.append(head);
+  if (spec.multi) {
+    const ta = el("textarea", { class: "ma-input mono", rows: String(spec.kind === "style" || spec.kind === "background" ? 4 : 6), spellcheck: "false" });
+    ta.value = "";
+    ta.placeholder = spec.kind === "chapters"
+      ? "第一回　雨夜\n（正文…）\n\n第二回　貨架後\n（正文…）"
+      : "可以直接貼，或按下面的「解析成多欄」自動分配";
+    ta.addEventListener("input", () => updateMultiPreview());
+    rowState.ta = ta;
+    row.append(ta);
+  }
+  const isArrayKind = ["chapters", "beats", "dialogue", "outfits"].includes(spec.kind);
+  if (isArrayKind) {
+    // 只選了回覆裡的一段（例如只選第 2 回）時預設「追加」，否則按下去會把其他章回／整場 beat 蓋掉
+    const sel = el("select", { class: "ma-mode" },
+      el("option", { value: "append", text: "追加到現有內容之後" }),
+      el("option", { value: "replace", text: "整份取代（會蓋掉現有的）" }));
+    sel.value = fromSelection ? "append" : "replace";
+    rowState.modeSel = sel;
+    row.append(el("label", { class: "ma-mode-row" }, el("span", { class: "hint", text: "寫入方式：" }), sel));
+  }
+  if (spec.hint) row.append(el("div", { class: "hint ma-hint", text: spec.hint }));
+  row.append(rowState.preview);
+  if (fromSelection) row.append(el("span", { class: "hint", text: "已帶入你在回覆裡選取的文字" }));
+  rowState.row = row;
+  check.addEventListener("change", () => {
+    row.classList.toggle("checked", check.checked);
+    updateMultiPreview();
+  });
+  // 結構格子預設都勾（來源就是這段回覆）；解析不到東西的格子不會進 items
+  if (spec.parse) { check.checked = true; row.classList.add("checked"); }
+  rowState.parsedFrom = initialText;
+  return rowState;
+}
+
+function renderMultiPanel(host, idx, selArg) {
+  host.textContent = "";
+  const t = chatState.target;
+  const specs = multiApplyFieldsFor(t);
+  if (!specs.length) return;
+  const bubble = bubbleElByIndex(idx);
+  const selNow = (selArg !== undefined ? selArg : replySelectionFor(bubble)) || "";
+  const picked = selNow ? { text: selNow, fromSelection: true }
+    : { text: (chatState.messages[idx] && chatState.messages[idx].content) || "", fromSelection: false };
+  const text = picked.text;
+  multiState.msg = idx;
+  multiState.rows = [];
+  // 選取範圍很可能是使用者要精準套用的那一段；之後解析都優先用它（不要因焦點移動而丟失）
+  multiState.selectedText = picked.fromSelection ? picked.text : "";
+  multiState.note = "";
+  multiState.plainRows = [];
+  const panel = el("div", { class: "ma-panel" });
+  panel.append(el("div", { class: "ma-head" },
+    el("strong", { text: "多欄套用" }),
+    el("span", { class: "hint ma-text", text: picked.fromSelection ? "（用你在回覆裡選取的文字）" : "（用整段回覆；先在回覆裡選一段就只套用那段）" })));
+
+  const bodyWrap = el("div", { class: "ma-body" });
+  bodyWrap.append(el("div", { class: "hint", text: "勾要套用的格子（整份結構一起寫）：" }));
+  for (const spec of specs) {
+    const rowState = buildSliderRow(spec, text, picked.fromSelection);
+    multiState.rows.push(rowState);
+    bodyWrap.append(rowState.row);
+  }
+  // 純文字欄位（每格一個欄位；要一次套多個就勾多個）
+  const plainHost = el("details", { class: "ma-plain" },
+    el("summary", { class: "hint", text: "其他單一欄位（要一次套多個就勾多個）" }));
+  for (const [path, label] of applyFieldsFor(t)) {
+    const c = el("input", { type: "checkbox" });
+    const ta = el("textarea", { class: "ma-input", rows: "2" });
+    ta.placeholder = `要寫進「${label}」的內容（勾了才用；留空不套用）`;
+    ta.addEventListener("input", () => updateMultiPreview());
+    const line = el("div", { class: "ma-plain-row" },
+      el("label", { class: "ma-slider-head" }, c, el("span", { text: label })), ta);
+    c.addEventListener("change", () => {
+      line.classList.toggle("checked", c.checked);
+      if (c.checked && !ta.value.trim()) ta.value = text;
+      updateMultiPreview();
+    });
+    multiState.plainRows.push({ path, check: c, ta });
+    plainHost.append(line);
+  }
+  panel.append(bodyWrap, plainHost);
+
+  const actions = el("div", { class: "ma-actions" });
+  const parseBtn = el("button", { class: "btn btn-small btn-primary", type: "button",
+    title: "把回覆自動分配到結構格子（不會直接寫檔，先看下方預覽）" }, "⇣ 解析成多欄");
+  const applyBtn = el("button", { class: "btn btn-small btn-primary", type: "button" }, "套用已勾的欄位");
+  const cancelBtn = el("button", { class: "btn btn-small", type: "button" }, "收起");
+  parseBtn.addEventListener("click", () => {
+    // 解析目標＝還沒解析過的格子；已解析過、使用者也沒取消勾選的保留結果
+    // 以使用者的勾選為準（預設全勾）；不要的格子先取消勾選再按解析
+    let targets = multiState.rows.filter((r) => r.spec.parse && r.check.checked);
+    if (!targets.length) { multiState.note = "這個對象沒有可解析的結構欄位"; updateMultiPreview(); return; }
+    const notes = [];
+    const srcText = multiState.selectedText || text;
+    for (const r of targets) {
+      const res = runParseForRow(r, srcText);
+      if (res.note) notes.push(`${r.spec.label.split("（")[0]}：${res.note}`);
+    }
+    multiState.note = notes.join("；");
+    multiState.previewOpen = true;
+    updateMultiPreview();
+  });
+  applyBtn.addEventListener("click", () => applyMulti(applyBtn));
+  cancelBtn.addEventListener("click", () => { host.textContent = ""; multiState.rows = []; });
+  actions.append(parseBtn, applyBtn, cancelBtn);
+  panel.append(actions, el("div", { class: "ma-note" }));
+  multiState.noteHost = panel.querySelector(".ma-note");
+  multiState.host = host;
+  host.append(panel);
+  updateMultiPreview();
+}
+
+// 對單一結構格子跑解析：來源＝使用者打過的 textarea，否則用「選取段落／整段回覆」
+function runParseForRow(rowState, fallbackText) {
+  const fallback = String(fallbackText || "");
+  const own = ((rowState.ta && rowState.ta.value) || "").trim();
+  const base = String(fallback || "");
+  const src = own && own !== base.trim() ? own : base;
+  const res = tidyParseResult(rowState.spec.kind, parseReplyIntoFields(
+    src, rowState.spec.kind, { characters: (state.project && state.project.characters) || [] }));
+  const count = countParsed(rowState.spec.kind, res.patches);
+  // 解析出東西就幫使用者勾起來；解析不到就「唯讀預覽」＋不勾（不留下看起來像成功其實空手的格子）
+  if (count > 0) {
+    rowState.check.checked = true;
+    rowState.row.classList.add("checked");
+  } else if (rowState.parsedText) {
+    // 解析過但一個都沒中 → 取消勾選（回覆裡沒有這種內容），避免按套用時空手
+    rowState.check.checked = false;
+    rowState.row.classList.remove("checked");
+  }
+  rowState.row.classList.toggle("parse-fail", count === 0 && !!rowState.parsedText);
+  rowState.value = res.patches;
+  rowState.parsedText = src;
+  renderSliderPreview(rowState, res);
+  return res;
+}
+
+function countParsed(kind, patches) {
+  const p = patches || {};
+  if (kind === "chapters") return (p.chapters || []).length;
+  if (kind === "style" || kind === "background") return Object.keys(p[kind] || {}).length;
+  if (kind === "beats" || kind === "dialogue") return (p[kind] || []).length;
+  if (kind === "outfits") return (p.outfits || []).length;
+  return 0;
+}
+
+// 解析結果整理：只留真的能寫進去的東西（例：章回開頭那句「以下是三回正文」不該變成第 1 回）
+function tidyParseResult(kind, res) {
+  const out = { patches: { ...(res.patches || {}) }, warnings: [...(res.warnings || [])], note: res.note || "" };
+  const clean = (s) => String(s || "").trim();
+  if (kind === "chapters") {
+    let arr = (out.patches.chapters || []).map((c) => ({ title: clean(c.title), body: clean(c.body || c.content) }));
+    // 開場白（很短、沒正文的一項）併進下一回或丟掉
+    arr = arr.filter((c, i) => {
+      if (/（未命名章回）/.test(c.title) && c.body.length < 40 && arr.length > 1) return false;
+      return c.title || c.body;
+    });
+    arr.forEach((c, i) => { c.id = `ch${String(i + 1).padStart(2, "0")}`; });
+    out.patches.chapters = arr;
+    out.note = arr.length ? `辨識到 ${arr.length} 回` : "沒有辨識到「第 N 回」開頭的分段";
+    if (!arr.length) out.warnings.push("回覆裡找不到「第一回　標題」這種開頭；可在 textarea 手動整理");
+  } else if (kind === "style" || kind === "background") {
+    const obj = {};
+    for (const [k, v] of Object.entries(out.patches[kind] || {})) if (clean(v)) obj[k] = clean(v);
+    out.patches = { [kind]: obj };
+    out.note = Object.keys(obj).length ? `辨識到 ${Object.keys(obj).length} 項` : "沒有辨識到「標籤：內容」行";
+  } else if (kind === "beats" || kind === "dialogue") {
+    const key = kind;
+    const arr = (out.patches[key] || []).filter((b) => clean(b.line));
+    out.patches = { [key]: arr };
+    const miss = arr.filter((b) => !b.characterId && (b.name || b._name));
+    out.note = arr.length ? `辨識到 ${arr.length} 個${kind === "beats" ? " beat" : "對白"}${miss.length ? `，${miss.length} 個對不到人物` : ""}` : "沒有辨識到「角色名：台詞」";
+  } else if (kind === "outfits") {
+    const arr = (out.patches.outfits || []).filter((o) => clean(o.name) || clean(o.desc) || clean(o.promptEn));
+    out.patches = { outfits: arr };
+    out.note = arr.length ? `辨識到 ${arr.length} 套服裝` : "沒有內容";
+  }
+  return out;
+}
+
+function renderSliderPreview(rowState, res) {
+  const p = rowState.preview;
+  p.textContent = "";
+  const patches = res.patches || {};
+  const lines = [];
+  if (rowState.spec.kind === "chapters") {
+    for (const c of patches.chapters || []) lines.push(`${c.id}｜${c.title}｜${(c.body || "").slice(0, 40)}…`);
+  } else if (rowState.spec.kind === "style") {
+    for (const [k, v] of Object.entries(patches.style || {})) lines.push(`${k}：${v}`);
+  } else if (rowState.spec.kind === "background") {
+    for (const [k, v] of Object.entries(patches.background || {})) lines.push(`${k}：${String(v).slice(0, 40)}`);
+  } else if (rowState.spec.kind === "beats" || rowState.spec.kind === "dialogue") {
+    const items = patches[rowState.spec.kind] || [];
+    items.forEach((b, i) => {
+      const who = b.characterId ? charNameById(b.characterId) : (b.name || b._name ? `⚠ ${b.name || b._name}（對不到人物）` : "（動作／無角色）");
+      lines.push(`${i + 1}. [${b.type || "dialogue"}] ${who}：${String(b.line || "").slice(0, 30)}`);
+    });
+  } else if (rowState.spec.kind === "outfits") {
+    for (const o of patches.outfits || []) lines.push(`${o.name}｜${String(o.desc || "").slice(0, 40)}`);
+  }
+  if (!lines.length) { p.append(el("div", { class: "hint", text: "尚未解析" })); return; }
+  if (res.warnings && res.warnings.length) {
+    p.append(el("div", { class: "ma-warn", text: `⚠ ${res.warnings.join("；")}` }));
+  }
+  p.append(el("div", { class: "hint", text: `解析結果 ${lines.length} 條（確認無誤後按「套用已勾的欄位」）：` }),
+    el("ol", { class: "ma-list" }, ...lines.slice(0, 12).map((l) => el("li", { text: l }))));
+  if (lines.length > 12) p.append(el("div", { class: "hint", text: `…還有 ${lines.length - 12} 條` }));
+  if (!String(res.note || "").trim()) p.append(el("div", { class: "hint", text: "（沒有可套用的結果：請確認回覆格式，或直接在 textarea 手動編修後再按套用）" }));
+}
+
+// 勾選狀態 → items（給 apply-batch 用）＋ 預覽文字
+// 規矩：textarea 沒有被使用者改過 → 用解析結果；被改過 → 以 textarea 重新解析（人工改動優先）
+function itemsFromRow(r, notes) {
+  const spec = r.spec;
+  const raw = ((r.ta && r.ta.value) || "").trim();
+  const patchSrc = raw || (r.parsedText || "").trim();
+  if (!patchSrc) { notes.push(`${spec.label}：內容是空的，略過`); return []; }
+  const own = ((r.ta && r.ta.value) || "").trim();
+  const changed = !r.value || (own && own !== (r.parsedText || "").trim());
+  const patches = changed
+    ? tidyParseResult(spec.kind, parseReplyIntoFields(patchSrc, spec.kind,
+        { characters: (state.project && state.project.characters) || [] })).patches
+    : r.value;
+  const out = [];
+  const clean = (s) => String(s || "").trim();
+  if (spec.kind === "chapters") {
+    const arr = (patches.chapters || []).map((c) => ({ title: clean(c.title), body: clean(c.body || c.content) })).filter((c) => c.title || c.body);
+    if (!arr.length) notes.push("章回：沒有辨識到任何一回");
+    else out.push({ path: "chapters", value: arr, mode: (r.modeSel && r.modeSel.value) || "replace" });
+  } else if (spec.kind === "style" || spec.kind === "background") {
+    const obj = patches[spec.kind] || {};
+    const pairs = Object.entries(obj).filter(([, v]) => clean(v));
+    if (!pairs.length) notes.push(`${spec.label}：沒有辨識到任何一項`);
+    for (const [k, v] of pairs) {
+      const path = spec.kind === "style" ? `style.${k}` : `background.${k}`;
+      out.push({ path, value: clean(v), mode: "replace" });
+    }
+  } else if (spec.kind === "beats") {
+    const arr = (patches.beats || []).filter((b) => clean(b.line)).map((b) => ({
+      type: b.type === "action" ? "action" : "dialogue",
+      characterId: b.characterId || null, line: clean(b.line), emotion: clean(b.emotion),
+    }));
+    if (!arr.length) notes.push("beats：沒有辨識到台詞或動作");
+    else out.push({ path: "beats", value: arr, mode: (r.modeSel && r.modeSel.value) || "replace" });
+  } else if (spec.kind === "dialogue") {
+    const arr = (patches.dialogue || []).filter((d) => clean(d.line)).map((d) => ({ characterId: d.characterId || null, line: clean(d.line) }));
+    if (!arr.length) notes.push("對白：沒有辨識到台詞");
+    else out.push({ path: "dialogue", value: arr, mode: (r.modeSel && r.modeSel.value) || "replace" });
+  } else if (spec.kind === "outfits") {
+    const arr = (patches.outfits || []).map((o) => ({ name: clean(o.name), desc: clean(o.desc), promptEn: clean(o.promptEn) }))
+      .filter((o) => o.name || o.desc || o.promptEn);
+    if (!arr.length) notes.push("服裝：沒有內容");
+    else out.push({ path: "outfits", value: arr, mode: (r.modeSel && r.modeSel.value) || "replace" });
+  }
+  return out;
+}
+
+function collectMultiItems() {
+  const items = [];
+  const notes = [];
+  for (const r of multiState.rows || []) {
+    if (!r.check.checked) continue;
+    items.push(...itemsFromRow(r, notes));
+  }
+  for (const p of multiState.plainRows || []) {
+    if (!p.check.checked) continue;
+    const v = (p.ta.value || "").trim();
+    if (!v) { notes.push(`${p.path}：內容是空的，略過`); continue; }
+    items.push({ path: p.path, value: v, mode: "replace" });
+  }
+  return { items, notes };
+}
+
+function updateMultiPreview() {
+  const host = multiState.noteHost;
+  if (!host) return;
+  host.textContent = "";
+  const { items, notes } = collectMultiItems();
+  const all = [...(multiState.note ? [multiState.note] : []), ...notes];
+  if (all.length) host.append(el("div", { class: "hint", text: all.join("；") }));
+  const modeTxt = items.map((i) => (i.mode === "append" ? `${i.path}（追加）` : i.path)).join("、");
+  host.append(el("div", { class: "ma-summary", text: items.length ? `將套用 ${items.length} 欄：${modeTxt}` : "尚未選擇要套用的欄位" }));
+}
+
+async function applyMulti(btn) {
+  if (!state.slug || multiState.busy) return;
+  const { items } = collectMultiItems();
+  if (!items.length) { setSaveStatus("error", "沒有可套用的欄位（先勾選並填入內容）"); return; }
+  multiState.busy = true;
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = "寫入中…";
+  try {
+    const res = await api(`/api/projects/${state.slug}/chat/apply-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: chatState.target, items }),
+    });
+    syncTargetFromServer(res.targetAfter);
+    const warns = (res.warnings || []).length ? `（提醒：${res.warnings.join("；")}）` : "";
+    setSaveStatus(warns ? "pending" : "saved", `已套用 ${res.updated.length} 欄到 ${res.label} · ${clockText()}${warns}`);
+    btn.textContent = `已套用 ${res.updated.length} 欄 ✓`;
+    multiState.rows.forEach((r) => { r.value = null; r.parsedText = null; });
+    setTimeout(() => { btn.textContent = oldText; btn.disabled = false; }, 1800);
+  } catch (e) {
+    btn.textContent = oldText;
+    btn.disabled = false;
+    setSaveStatus("error", `套用失敗（整批未寫入）：${e.message}`);
+  } finally {
+    multiState.busy = false;
+  }
 }
 
 // ── 送出 ─────────────────────────────────────────────────

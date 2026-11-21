@@ -496,7 +496,7 @@ def validate_project(data: object) -> list[str]:
             for cid in es.get("characterIds", []) or []:
                 check("characterIds", cid, char_ids, where)
             for beat in es.get("beats", []) or []:
-                if isinstance(beat, dict):
+                if isinstance(beat, dict) and not beat.get("_skipped"):
                     check("characterId", beat.get("characterId"), char_ids, f"{where} 的 beat {beat.get('id', '?')}")
 
     # 鏡頭引用
@@ -509,9 +509,11 @@ def validate_project(data: object) -> list[str]:
             continue
         for es in ep.get("scenes", []) or []:
             if isinstance(es, dict) and es.get("id"):
-                beat_count[es["id"]] = len([b for b in (es.get("beats") or []) if isinstance(b, dict)])
+                beat_count[es["id"]] = len([b for b in (es.get("beats") or [])
+                                            if isinstance(b, dict) and not b.get("_skipped")])
                 beat_id_map[es["id"]] = [b for b in (es.get("beats") or [])
-                                         if isinstance(b, dict) and b.get("type") == "dialogue"]
+                                         if isinstance(b, dict) and b.get("type") == "dialogue"
+                                         and not b.get("_skipped")]
     for shot in data["shots"]:
         if not isinstance(shot, dict):
             errors.append("shots 內每項必須是物件")
@@ -740,27 +742,277 @@ _PROTECTED_KEYS = {"id", "path", "refAudio"}  # 定位用或檔案路徑，不�
 _MAX_PATH_DEPTH = 6                          # dialogue.0.line / spec.lighting 都需要 3–4 層
 
 # M3b：每個 kind 允許套用的欄位（白名單；前綴 _ 表示「該卡本身」，其餘填點分路徑）
+# M13a：加入「整份結構陣列」（章回／beats／dialogue／outfits）與其元素欄位；
+#       形狀由 _norm_array_items 驗，不合法就中文報錯（不寫進專案）。
 APPLY_FIELD_WHITELIST = {
-    "story": {"synopsis", "premise", "style.genre", "style.tone", "style.visualStyle", "style.negative"},
+    "story": {"synopsis", "premise", "style.genre", "style.tone", "style.visualStyle", "style.negative",
+              "chapters", "chapters.*.title", "chapters.*.body", "chapters.*.summary"},
     "character": {
         "appearance.promptEn", "appearance.face", "appearance.hair", "appearance.body", "appearance.skin",
         "background.birth", "background.personality", "background.goal", "background.secret",
         "voice.desc",
+        "outfits", "outfits.*.name", "outfits.*.desc", "outfits.*.promptEn",
     },
     "scene": {"desc", "promptEn", "lighting", "mood", "timeOfDay", "ambience.note"},
-    "episodeScene": {"summary", "title"},
+    "episodeScene": {"summary", "title",
+                     "beats", "beats.*.id", "beats.*.line", "beats.*.action", "beats.*.emotion",
+                     "beats.*.notes", "beats.*.type", "beats.*.characterId"},
     "beat": {"line", "emotion", "notes"},
     "shot": {
         "promptZh", "promptEn",
         "spec.shotType", "spec.angle", "spec.cameraMove", "spec.composition", "spec.lighting",
+        "spec.angle.h", "spec.angle.v", "spec.angle.s",
+        "dialogue", "dialogue.*.line", "dialogue.*.characterId",
+        "beats",
     },
 }
 
-# 陣列索引路徑用「*」比對（outfits.*.promptEn、dialogue.*.line）
+# 陣列索引路徑用「*」比對（outfits.*.promptEn、dialogue.0.line）
 _APPLY_FIELD_PATTERNS = {
-    "outfits.*.promptEn", "outfits.*.desc",
-    "dialogue.*.line",
+    "outfits.*.promptEn", "outfits.*.name", "dialogue.*.line", "dialogue.*.characterId",
+    "chapters.*.title", "chapters.*.body", "chapters.*.summary",
+    "beats.*.line", "beats.*.action", "beats.*.emotion", "beats.*.notes",
+    "beats.*.type", "beats.*.characterId", "beats.*.id",
 }
+
+# ── M13a：結構陣列的元素形狀（整份寫入前逐項驗，append 時自動補 id）──────
+_BEAT_TYPES = ("dialogue", "action")
+# 欄位名 → (中文標籤, 是否必須是文字)
+_ARRAY_ITEM_FIELDS = {
+    "chapters": {"id": ("id", False), "title": ("標題", False), "summary": ("摘要", False),
+                 "body": ("正文", False), "content": ("正文", False)},
+    "beats": {"id": ("id", False), "type": ("類型", False), "characterId": ("角色", False),
+              "line": ("台詞", False), "action": ("動作", False), "emotion": ("情緒", False),
+              "notes": ("備註", False), "start": ("開始秒數", True), "end": ("結束秒數", True),
+              "cut": ("剪點", True), "camera": ("運鏡", False), "locationId": ("場景", False)},
+    "dialogue": {"characterId": ("角色", False), "line": ("台詞", False)},
+    "outfits": {"id": ("id", False), "name": ("名稱", False), "desc": ("描述", False),
+                "promptEn": ("英文 prompt", False)},
+}
+_ARRAY_PREFIX = {"chapters": "ch", "beats": "b", "dialogue": "d", "outfits": "o"}
+_ARRAY_LABEL = {"chapters": "章回", "beats": "beat", "dialogue": "台詞", "outfits": "服裝"}
+
+
+def _apply_allowed(kind: str, path: str) -> bool:
+    base = APPLY_FIELD_WHITELIST.get(kind, set()) | (_APPLY_FIELD_PATTERNS.get(kind, set()))
+    if path in base:
+        return True
+    # 數字索引換成 * 再比一次（outfits.0.promptEn → outfits.*.promptEn）
+    normalized = ".".join("*" if part.isdigit() else part for part in (path or "").split("."))
+    return normalized in base
+
+
+def _apply_allowed_list(kind: str) -> list[str]:
+    pool = set(APPLY_FIELD_WHITELIST.get(kind, set())) | set(_APPLY_FIELD_PATTERNS.get(kind, set()))
+    return sorted(pool)
+
+
+def _array_key(path: str) -> str | None:
+    """整份陣列路徑（chapters / beats / dialogue / outfits）回它的 key，其餘 None。"""
+    p = (path or "").strip()
+    return p if p in _ARRAY_ITEM_FIELDS else None
+
+
+_ELEM_ALIAS = {("chapters", "body"): "content"}  # 章回正文在資料模型叫 content
+
+
+def _elem_field_path(path: str, key: str) -> str:
+    """chapters.1.body → chapters.1.content；beats.0.x 原樣。"""
+    parts = path.split(".")
+    if len(parts) >= 3:
+        parts[2] = _ELEM_ALIAS.get((key, parts[2]), parts[2])
+    return ".".join(parts)
+
+
+def character_name_map(data: dict) -> dict[str, str]:
+    """角色名字／別名 → id（M13a：模型輸出常寫名字，「角色名：台詞」要能對到 id）。"""
+    out: dict[str, str] = {}
+    for c in data.get("characters") or []:
+        if not isinstance(c, dict) or not c.get("id"):
+            continue
+        for label in [c.get("name")] + list(c.get("aliases") or []):
+            name = str(label or "").strip()
+            if name and name not in out:
+                out[name] = str(c["id"])
+    return out
+
+
+def resolve_character_id(data: dict, value, *, warn_name: str = "") -> tuple[str | None, str | None]:
+    """characterId 正規化：id 直接用；給名字就查 id；查不到回 (None, 警告文字)。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    ids = {str(c.get("id")) for c in data.get("characters") or [] if isinstance(c, dict)}
+    if raw in ids:
+        return raw, None
+    hit = character_name_map(data).get(raw)
+    if hit:
+        return hit, None
+    who = f"{warn_name} " if warn_name else ""
+    return None, f"{who}的角色「{raw}」對不到現有人物，characterId 已存 null（請自行指定）"
+
+
+def _add_skipped(value: object) -> object:
+    """beats／dialogue 整份覆寫後，補回被換掉的舊項（標記 _skipped，不進生成）。
+
+    M12a 讓 mirror 是單向的：場次 beats 是真相，鏡頭 beats 從它生成。
+    模型只改了台詞時把舊的動作／鏡位丟掉太可惜，所以保留在檔案裡（帶 _skipped），
+    之後可使用者在劇本頁還原；驗證時帶 _skipped 的項把引用欄位先清空再檢查。
+    """
+    out = []
+    for it in value if isinstance(value, list) else []:
+        if isinstance(it, dict):
+            it = {**it, "_skipped": True}
+        out.append(it)
+    return out
+
+
+def _diff_arrays(old: list, new: list) -> list:
+    """old 有、new 沒有的項（以關鍵字比對）→ 加上 _skipped。"""
+    def key(x):
+        return json.dumps({k: v for k, v in x.items() if not k.startswith("_") and k != "id"},
+                          ensure_ascii=False, sort_keys=True)
+    keys = {key(x) for x in new if isinstance(x, dict)}
+    return [x for x in old if isinstance(x, dict) and key(x) not in keys]
+
+
+def _reconcile_beat_refs(data: dict, es: dict, valid_ids: set[str], label: str,
+                         warnings: list[str]) -> None:
+    """場次 beats 換掉後，把引用它的鏡頭對齊（M12a 的約定：不讓引用指向不存在的句子）。
+
+    - dialogBeatIds 只留這次仍存在的句子（被刪掉的句子引用一併移除）
+    - dialogLineRefs 依「每個 dialogue beat 的舊→新」換算；
+      舊句子不在新清單裡就看得出「你這鏡原本演的那句被換掉了」→ 該鏡不再引用（不硬塞別句台詞）
+    """
+    old_dlg = [b for b in (es.get("beats") or []) if isinstance(b, dict) and b.get("type") == "dialogue"]
+    new_dlg = [b for b in (es.get("beats") or [])
+               if isinstance(b, dict) and b.get("type") == "dialogue" and not b.get("_skipped")]
+    removed = len({str(b.get("id")) for b in old_dlg} - {str(b.get("id")) for b in new_dlg})
+    touched = 0
+    for sh in data.get("shots") or []:
+        if not isinstance(sh, dict) or sh.get("episodeSceneId") != es.get("id"):
+            continue
+        ids = [x for x in (sh.get("dialogBeatIds") or []) if isinstance(x, str)]
+        kept = [x for x in ids if x in valid_ids]
+        lost = len(ids) - len(kept)
+        if lost or ids != sh.get("dialogBeatIds"):
+            touched += 1
+            sh["dialogBeatIds"] = kept
+        sh["dialogLineRefs"] = dialog_beat_index(kept, new_dlg)
+    if touched and removed:
+        warnings.append(
+            f"{label}原有的 {removed} 句台詞被換掉，引用它們的 {touched} 個鏡頭已不再引用該句"
+            f"（要保留請在鏡頭卡重新勾選「引用劇本台詞」）")
+
+
+def _norm_array_items(data: dict, key: str, items, *, mode: str, existing: list,
+                      label: str) -> tuple[list[dict], list[str]]:
+    """把「整份陣列」的輸入驗成合法元素清單。不合法 → StorageError（中文，指出第幾項）。
+
+    - 只收已知欄位（防模型亂塞 promptPlaceholders 等程式產生欄位）
+    - id：沒給就自動編（沿用 storage.next_id，append 時避開既有 id）；重複 → 報錯
+    - 章回：body 與 content 同義，一律存 content（前端故事頁讀 content）
+    - beats：type 只收 dialogue／action；characterId 給名字自動換 id（對不到存 null＋warning）
+    """
+    if not isinstance(items, list):
+        raise StorageError(f"{label}必須是陣列（收到 {type(items).__name__}）")
+    if mode == "append" and not items:
+        raise StorageError(f"附加（append）{label}至少要有一項")
+    fields = _ARRAY_ITEM_FIELDS[key]
+
+    def _fields_for(alias: bool) -> dict:
+        f = dict(fields)
+        if alias and key == "beats":
+            f["action"] = fields["line"]       # beats.*.action 是 line 的別名（不改資料模型）
+        return f
+
+    out: list[dict] = []
+    warnings: list[str] = []
+    hard = [dict(x) for x in (existing or []) if isinstance(x, dict)]
+    for i, item in enumerate(items):
+        where = f"{label} 第 {i + 1} 項"
+        if not isinstance(item, dict):
+            raise StorageError(f"{where}必須是物件（例如 {{\"title\": …, \"body\": …}}）")
+        unknown = [k for k in item.keys() if k not in fields]
+        if unknown:
+            raise StorageError(
+                f"{where}含不接受的欄位：{'、'.join(map(str, unknown))}（可用：{'、'.join(fields)}）")
+        row: dict = {}
+        for k, v in item.items():
+            ok_text = _fields_for(True)[k][1]
+            if v is None:
+                continue
+            if ok_text and not isinstance(v, (int, float, bool)):
+                raise StorageError(f"{where}的{fields[k][0]}（{k}）必須是數字或布林")
+            if not ok_text and not isinstance(v, str):
+                raise StorageError(f"{where}的{fields[k][0]}（{k}）必須是文字（收到 {type(v).__name__}）")
+            row[k] = v
+        if isinstance(item.get("_skipped"), bool):
+            row["_skipped"] = item["_skipped"]
+        if key == "chapters":
+            content = row.pop("body", "") or row.get("content") or ""
+            row["content"] = str(content)
+            title = str(row.get("title") or "").strip()
+            if not (title or row["content"].strip()):
+                raise StorageError(f"{where}的標題與正文都是空的")
+            row["title"] = title
+            row.setdefault("summary", str(row.get("summary") or ""))
+        if key == "beats" and "type" in row and row["type"]:
+            t = str(row["type"]).strip()
+            if t not in _BEAT_TYPES:
+                raise StorageError(
+                    f"{where}的類型（type）只能是 dialogue 或 action（收到 {t!r}）")
+            row["type"] = t
+        if key in ("beats", "dialogue") and "characterId" in row:
+            cid, warn = resolve_character_id(data, row.get("characterId"), warn_name=where)
+            row["characterId"] = cid
+            if warn:
+                warnings.append(warn)
+        if key == "beats" and any("action" in it for it in items if isinstance(it, dict)):
+            warnings.append(
+                "beats 的 action 欄位已寫進 line（資料模型沒有單獨的 action；台詞與動作要分開請拆成兩個 beat）")
+        if key == "chapters" and any("body" in it for it in items if isinstance(it, dict)) \
+                and not any("body 已寫進 content" in w for w in warnings):
+            warnings.append("章回的 body 已寫進 content（故事頁的正文欄位）")
+        if key == "beats" and row.get("type") in (None, "") and row.get("line"):
+            row["type"] = "dialogue"
+        old_id = row.get("id")
+        if old_id:
+            oid = str(old_id).strip()
+            if oid in {str(x.get("id")) for x in out}:
+                raise StorageError(f"{where}的 id 重複：{oid}")
+            row["id"] = oid
+        out.append(row)
+    # 缺 id 的自動編號（append 時把既有的一起算進去，避免撞號）
+    need = [row for row in out if not row.get("id")]
+    if need:
+        pool = hard + [r for r in out if r.get("id")]
+        for row in need:
+            row["id"] = next_id(pool, _ARRAY_PREFIX[key])
+            pool = pool + [row]
+    if key == "beats":
+        seen_lines = "、".join(f"第 {i + 1} 項" for i, r in enumerate(out) if not str(r.get("line") or "").strip())
+        if seen_lines:
+            warnings.append(f"{seen_lines}沒有台詞／動作（line 是空的）")
+    return out, warnings
+
+
+def _merge_array_value(key: str, old, value, mode: str, *, label: str) -> list[dict]:
+    """整份陣列的 replace／append 換算（append 只加在尾端，不覆蓋既有）。
+
+    附加的新項一律拿掉 id：append 是「多一回／多一句」，沿用既有 id 會撞號，
+    由 _norm_array_items 重新編。
+    """
+    if not isinstance(value, list):
+        raise StorageError(f"{label}必須是陣列（收到 {type(value).__name__}）")
+    if mode == "append":
+        extra = [dict(x) for x in value if isinstance(x, dict)]
+        for x in extra:
+            x.pop("id", None)
+            x.pop("_skipped", None)
+        return [dict(x) for x in (old or []) if isinstance(x, dict)] + extra
+    return [dict(x) for x in value]
+
 
 _LLM_DEFAULTS = {
     "local": {"baseUrl": "http://127.0.0.1:8080/v1", "model": "auto"},
@@ -900,6 +1152,21 @@ def set_path(obj: dict, path: str, value, mode: str = "replace") -> tuple[object
             raise StorageError(f"欄位路徑含不合法字元：{p!r}")
     if parts[0] in _PROTECTED_KEYS:
         raise StorageError(f"欄位 {parts[0]} 不開放模型寫入（定位或檔案路徑）")
+    # M13a：beats.*.action 是 line 的別名（資料模型沒有單獨的 action 欄位）
+    if len(parts) >= 3 and parts[0] == "beats" and parts[2] == "action":
+        parts = parts[:2] + ["line"]
+    # M13a：指到既有陣列的某一項時，索引必須存在（不讓路徑自己長出空殼章回／beat）
+    for i in range(len(parts) - 1):
+        if parts[i] in _ARRAY_ITEM_FIELDS and re.fullmatch(r"\d+", parts[i + 1]):
+            base = obj
+            for seg in parts[:i]:
+                base = base.get(seg) if isinstance(base, dict) else None
+                if base is None:
+                    break
+            if not isinstance(base, list) or int(parts[i + 1]) >= len(base):
+                raise StorageError(
+                    f"陣列索引超出範圍：{'.'.join(parts[:i + 2])}（目前只有 "
+                    f"{len(base) if isinstance(base, list) else 0} 項；要新增請寫整份 {parts[i]}）")
 
     cur = obj  # 目前所在的容器（dict 或 list）
     created: list[tuple] = []  # 沿途新建的容器（失敗時拆掉，別在專案裡留下空殼）
@@ -971,49 +1238,193 @@ def set_path(obj: dict, path: str, value, mode: str = "replace") -> tuple[object
     return old, new
 
 
+def locate_target(data: dict, kind: str, target_id: str | None,
+                  parent_id: str | None = None) -> tuple[dict, str | None]:
+    """kind+id(+parent) → 目標物件。beat 用 parentId（所屬場次）定位（beat id 只在場次內唯一）。
+    回 (物件, 所屬場次 id 或 None)。"""
+    if kind == "beat" and parent_id:
+        found = None
+        for ep in ((data.get("script") or {}).get("episodes") or []):
+            if not isinstance(ep, dict):
+                continue
+            for es in ep.get("scenes") or []:
+                if isinstance(es, dict) and es.get("id") == parent_id:
+                    for beat in es.get("beats") or []:
+                        if isinstance(beat, dict) and beat.get("id") == target_id:
+                            found = beat
+                            break
+                if found:
+                    break
+            if found:
+                break
+        if found is None:
+            raise StorageError(f"找不到 beat：{parent_id}/{target_id}")
+        return found, parent_id
+    target = find_target(data, kind, target_id)
+    where = None
+    if kind == "beat":
+        hit = run_for_beat(data, target_id or "")
+        where = (hit or {}).get("episodeSceneId")
+    return target, where
+
+
+def _merge_beats_allowed(kind: str, target: dict, path: str, warnings: list[str]) -> None:
+    """M13a：鏡頭的 beats 是片長節點（start／end／cut／camera，由生成端產生），不是台詞清單。
+    只寫 beats.0.line 這種「有歌詞感」的路徑會把結構洗掉 → 一律拒絕，並指出該改哪裡。"""
+    if kind != "shot":
+        return
+    if path.startswith("beats") and not target.get("beats") and path != "beats":
+        raise StorageError(
+            f"鏡頭的 {path} 指向不存在的 beat；鏡頭的 beats 是片長節點，請寫整份 beats 或改回填台詞（dialogue）")
+    if path == "beats" and target.get("beats"):
+        warnings.append("鏡頭的 beats 是片長節點（start／end／cut），改台詞請用 dialogue 或「引用劇本台詞」")
+
+
+def _hints_for(kind: str) -> str:
+    """整份陣列被誤餵成文字時的提示（指出該用哪個欄位）。"""
+    return {
+        "story": "章回請用 chapters（整份陣列，每項 {title, body}），或 chapters.*.title／chapters.*.body",
+        "episodeScene": "台詞請用 beats（整份陣列，每項 {type, characterId, line}），或 beats.*.line",
+        "shot": "本鏡台詞請用 dialogue（整份陣列，每項 {characterId, line}）",
+        "character": "服裝請用 outfits（整份陣列，每項 {name, desc, promptEn}）",
+    }.get(kind, "")
+
+
+def _check_apply_path(kind: str, path: str) -> str:
+    """白名單檢查 + 路徑形狀檢查（點分、段名字元）。回正規化後的路徑。"""
+    if kind not in APPLY_FIELD_WHITELIST:
+        raise StorageError(
+            f"不支援的套用對象：{kind!r}（可用：{' / '.join(APPLY_FIELD_WHITELIST)}）")
+    p = (path or "").strip()
+    parts = p.split(".")
+    if not p or any(not x for x in parts) or len(parts) > _MAX_PATH_DEPTH:
+        raise StorageError(f"欄位路徑不合法：{path!r}")
+    for part in parts:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*|\d+", part):
+            raise StorageError(f"欄位路徑含不合法字元：{part!r}")
+    if not _apply_allowed(kind, p):
+        hint = _hints_for(kind)
+        raise StorageError(
+            f"不允許寫入的欄位：{p!r}（{kind} 可用：{'、'.join(_apply_allowed_list(kind))}）"
+            + (f"；{hint}" if hint else ""))
+    return p
+
+
+def apply_item_in_memory(data: dict, target: dict, kind: str, path: str, value, mode: str,
+                         warnings: list[str] | None = None, *, is_single_target: bool = True) -> dict:
+    """把一個欄位（純量或整份結構陣列）寫進記憶體中的 target。不驗證、不寫檔。
+
+    規則只有這一份：apply_to_target（單欄）與 apply_to_target_batch（多欄）都走這裡。
+    回 {"path","oldValue","value"}；不合法的陣列元素 → StorageError（中文）。
+    """
+    if mode not in ("replace", "append"):
+        raise StorageError(f"mode 只能是 replace 或 append（收到 {mode!r}）")
+    p = _check_apply_path(kind, path)
+    out_warn = [] if warnings is None else warnings
+    _merge_beats_allowed(kind, target, p, out_warn)
+    key = _array_key(p)
+    if key:
+        label = _ARRAY_LABEL[key]
+        old_arr = target.get(key) if isinstance(target.get(key), list) else []
+        if mode == "append" and "." in p:
+            # 指到某一項（beats.0.line、chapters.1.body）的附加：只在該項內附加文字，不加新項
+            old_arr = [dict(x) for x in old_arr]
+            target[key] = old_arr
+            old, new = set_path(target, _elem_field_path(p, key), value, "append")
+        else:
+            merged = _merge_array_value(key, old_arr, value, mode, label=label)
+            items, warns = _norm_array_items(data, key, merged, mode=mode, existing=old_arr, label=label)
+            out_warn.extend(warns)
+            if mode == "replace" and is_single_target and key in ("beats", "dialogue"):
+                gone = _diff_arrays(old_arr, items)
+                if gone:
+                    items = items + _add_skipped(gone)
+                    out_warn.append(f"{label}原有 {len(gone)} 項被新內容取代，舊項已保留（標記 _skipped，不進生成）")
+            old, new = old_arr, items
+            target[key] = items
+        if key == "beats" and kind == "episodeScene":
+            _reconcile_beat_refs(data, target, {str(x.get("id")) for x in items if not x.get("_skipped")},
+                                 label, out_warn)
+        if key == "beats" and kind in ("episodeScene", "shot") and isinstance(target.get("characterIds"), list):
+            # 新增的角色順手補進場次／鏡頭的 characterIds（否則存了角色卻不在名單裡）
+            ids = target["characterIds"]
+            for it in items:
+                cid = it.get("characterId")
+                if cid and cid not in ids:
+                    ids.append(cid)
+    else:
+        old, new = set_path(target, p, value, mode)
+    return {"path": p, "oldValue": old, "value": new}
+
+
+def apply_to_target_batch(slug: str, kind: str, target_id: str | None, items: list[dict],
+                          parent_id: str | None = None) -> dict:
+    """M13a：一次套用多個欄位（可能就是結構陣列＋幾個純量）。
+
+    行為：一次 load → 逐項寫在記憶體 → 單次 validate_project → 原子寫檔一次。
+    任何一項不合法就整批不寫（StorageError 帶「第 N 項」，檔案完全不動）。
+    """
+    if not isinstance(items, list) or not items:
+        raise StorageError("items 至少要有一項要套用的欄位")
+    with _lock:
+        data = load_project(slug)
+        # 先把所有路徑／白名單檢查跑完，再動資料（避免前面寫了才發現後面不合法）
+        for i, it in enumerate(items):
+            if not isinstance(it, dict):
+                raise StorageError(f"第 {i + 1} 項必須是物件（path／value／mode）")
+            try:
+                _check_apply_path(kind, str(it.get("path") or ""))
+            except StorageError as e:
+                raise StorageError(f"第 {i + 1} 項：{e}") from e
+        target, where = locate_target(data, kind, target_id, parent_id)
+        updated: list[dict] = []
+        warnings: list[str] = []
+        for i, it in enumerate(items):
+            try:
+                updated.append(apply_item_in_memory(
+                    data, target, kind, str(it.get("path") or ""), it.get("value"),
+                    str(it.get("mode") or "replace"), warnings))
+            except StorageError as e:
+                raise StorageError(f"第 {i + 1} 項（{it.get('path')}）：{e}") from e
+        migrate_dialog_linkage(data)
+        errors = validate_project(data)
+        if errors:
+            raise StorageError("寫入後結構不合法（整批未寫入）：" + "；".join(errors))
+        meta = data["meta"]
+        meta["updatedAt"] = now_iso()
+        ensure_media_dirs(slug)
+        _write_json_atomic(project_file(slug), data)
+    out_target = target
+    if kind == "shot":
+        out_target = next((s for s in data.get("shots") or []
+                           if isinstance(s, dict) and s.get("id") == target_id), target)
+    return {
+        "updated": updated,
+        "targetAfter": out_target,
+        "target": {"kind": kind, "id": target.get("id") if kind != "story" else None,
+                   **({"parentId": where} if where else {})},
+        "warnings": warnings,
+        "updatedAt": meta["updatedAt"],
+    }
+
+
 def apply_to_target(slug: str, kind: str, target_id: str | None, path: str, value, mode: str = "replace",
                     parent_id: str | None = None) -> dict:
     """讀-改-寫：套用單一欄位到專案的某張卡，原子寫回，回更新後片段。
 
-    M3b：
-    - path 必須在 APPLY_FIELD_WHITELIST／pattern 內（不再是「任意路徑」）
-    - kind=beat 時 target_id 是 beat id，可能全專案重複 → 用 parent_id（所屬場次）定位
-    - 回傳 targetAfter：story/character/scene/episodeScene/beat 回該物件本身；shot 回整支鏡頭
+    M3b：path 必須在白名單內；kind=beat 用 parent_id（所屬場次）定位。
+    M13a：改走 apply_item_in_memory（與 apply_to_target_batch 同一套驗證），
+          因此「整份陣列」（章回／beats／dialogue／outfits）也能用單欄介面寫。
     """
     if kind not in APPLY_FIELD_WHITELIST:
         raise StorageError(f"不支援的套用對象：{kind!r}（可用：{' / '.join(APPLY_FIELD_WHITELIST)}）")
-    if not _apply_allowed(kind, path):
-        allowed = sorted(APPLY_FIELD_WHITELIST.get(kind, set()) | _APPLY_FIELD_PATTERNS)
-        raise StorageError(f"不允許寫入的欄位：{path!r}（{kind} 可用：{'、'.join(allowed)}）")
+    _check_apply_path(kind, path)
     with _lock:
         data = load_project(slug)
-        where = None
-        if kind == "beat" and parent_id:
-            # 以「所屬場次 + beat id」定位（beat id 只在場次內唯一）
-            found = None
-            for ep in ((data.get("script") or {}).get("episodes") or []):
-                if not isinstance(ep, dict):
-                    continue
-                for es in ep.get("scenes") or []:
-                    if isinstance(es, dict) and es.get("id") == parent_id:
-                        for beat in es.get("beats") or []:
-                            if isinstance(beat, dict) and beat.get("id") == target_id:
-                                found = beat
-                                break
-                    if found:
-                        break
-                if found:
-                    break
-            if found is None:
-                raise StorageError(f"找不到 beat：{parent_id}/{target_id}")
-            target = found
-            where = parent_id
-        else:
-            target = find_target(data, kind, target_id)
-            if kind == "beat":
-                hit = run_for_beat(data, target_id or "")
-                where = (hit or {}).get("episodeSceneId")
-        old, new = set_path(target, path, value, mode)
+        target, where = locate_target(data, kind, target_id, parent_id)
+        warnings: list[str] = []
+        done = apply_item_in_memory(data, target, kind, path, value, mode, warnings)
+        old, new = done["oldValue"], done["value"]
         errors = validate_project(data)
         if errors:
             raise StorageError("；".join(errors))
@@ -1031,6 +1442,7 @@ def apply_to_target(slug: str, kind: str, target_id: str | None, path: str, valu
         "mode": mode,
         "oldValue": old,
         "value": new,
+        "warnings": warnings,
         "updatedAt": meta["updatedAt"],
         "targetAfter": out_target,
     }

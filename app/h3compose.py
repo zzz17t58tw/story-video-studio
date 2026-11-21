@@ -79,7 +79,8 @@ def find_scene_ctx(data: dict, shot: dict) -> dict:
 
 
 def scene_dialogue(ctx: dict) -> list[dict]:
-    return [b for b in ((ctx.get("es") or {}).get("beats") or []) if b.get("type") == "dialogue"]
+    return [b for b in ((ctx.get("es") or {}).get("beats") or [])
+            if b.get("type") == "dialogue" and not b.get("_skipped")]
 
 
 def shot_dialog_lines(shot: dict, ctx: dict, warnings: list | None = None) -> tuple[list[tuple[int, dict]], str, list[str]]:
@@ -310,7 +311,8 @@ def compile_prompt(data: dict, shot: dict) -> tuple[str, list[str], dict]:
         warnings.append(f"已編譯者請確認 slots 順序：{'、'.join(f'#%s %s' % (s['ordinal'], s['id']) for s in refs)}")
 
     # ② 動作（beats.action 優先，沒有就用 promptZh／場次摘要）
-    actions = [_s(b.get("action")) for b in (shot.get("beats") or []) if _s(b.get("action"))]
+    actions = [_s(b.get("action")) for b in (shot.get("beats") or [])
+               if _s(b.get("action")) and not b.get("_skipped")]
     if actions:
         joined = ""
         for i, a in enumerate(actions):
@@ -443,7 +445,8 @@ def validate_project(data: dict) -> dict:
     # ① 台詞覆蓋（M12a：dialogBeatIds 優先、舊 dialogLineRefs 退回）：完整覆蓋所屬場次 dialogue
     for ep in ((data.get("script") or {}).get("episodes") or []):
         for es in (ep.get("scenes") or []):
-            dlg = [b for b in (es.get("beats") or []) if b.get("type") == "dialogue"]
+            dlg = [b for b in (es.get("beats") or [])
+                   if b.get("type") == "dialogue" and not b.get("_skipped")]
             covered: set[int] = set()
             for sh in (data.get("shots") or []):
                 if sh.get("episodeSceneId") != es.get("id"):
