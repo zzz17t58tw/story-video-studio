@@ -63,6 +63,9 @@
 - M10 修正批次（每個 bug 一個分支切片，編號 M10a、M10b…）：目前追蹤中的 bug 見 `docs/TODO-backlog.md`
   - M10a 燈箱關閉鈕失效（`bindLightboxEvents` 在 `#lightbox` 存在前就執行，事件從未綁上）
 - M11 佈署品質與健壯性（2026-11-20，直接 commit 在 main）：版本戳單一真相、狀態探測快取、一鍵佈署實走除錯（線上＋本地）、**一鍵佈署改成逐步落地**（每完成一層就寫檔）。交接單：`docs/handoff/main-deploy-incremental.md`
+- M12 內容層一致性（2026-11-21，使用者回報兩件，拆兩輪各一條分支）
+  - M12a 鏡頭↔劇本連動：鏡頭卡顯示可勾選的「引用劇本台詞」（dialogBeatIds，舊 dialogLineRefs 自動遷移）、劇本頁每句標註被哪些鏡頭引用、兩頁同一份真相不再各存副本
+  - M12b 提示詞規則寫死：`app/promptrules.py` 集中每個引擎的官方規則（H3 六段式＋`<Picture N>`／MOSS caption／Qwen 官方槽位），送件前硬驗並在 UI 顯示本次送出的提示詞
 
 ## 技術選型（固定，子代理不得自行更換）
 
