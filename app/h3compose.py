@@ -626,7 +626,9 @@ def validate_project(data: dict) -> dict:
         elif not prompt_en:
             issues.append(_issue("warn", "shot", sid, "promptEn 是空的（可先按「模板編譯 prompt」產生草稿）", name))
 
-        # ③ 影格（契約 V3：長度必須落在 H3 合法格 124–362 幀；本版起 warn → error）
+        # ③ 影格（契約 V3）：
+        #    - 吸附後落在合法域 124–362 → 只是「沒對齊」，送件時 h3gen 會自動吸附，故為 warn
+        #    - 吸附後超出合法域（太短／太長，真的生不出來）→ error
         fr = frames_for(sh.get("durationSec"), fps)
         if not fr["inRange"]:
             issues.append(_issue("error", "shot", sid,
@@ -634,9 +636,9 @@ def validate_project(data: dict) -> dict:
                                  f"不在 H3 合法域 124–362（合約 V3）；請調到 5.17–15.08 秒或按「由劇本自動分鏡」重修",
                                  name))
         elif abs(fr["deltaFrames"]) > 0:
-            issues.append(_issue("error", "shot", sid,
+            issues.append(_issue("warn", "shot", sid,
                                  f"durationSec={sh.get('durationSec')}s 換算 {fr['raw']} 幀，不是 H3 合法格 17k+5"
-                                 f"（合約 V3）；應吸附到 {fr['legal']} 幀＝{fr['legal'] / fps:.2f}s"
+                                 f"（合約 V3）；送件時會吸附到 {fr['legal']} 幀＝{fr['legal'] / fps:.2f}s"
                                  f"（total_frames 對齊 {fr['aligned']}=17k+1）",
                                  name))
 

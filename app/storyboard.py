@@ -31,6 +31,9 @@ from . import h3compose, storage, storygen
 
 FPS_DEFAULT = 24
 FRAME_MIN, FRAME_MAX = 124, 362
+# 短 beat 不足最短長度時，最多願意用「留白」補到幾秒；超過就與相鄰 beat 合併。
+# 0.5 秒的停留是戲（呼吸、眼神、沉默），2 秒的停留就是空等 → 寧可合併。
+PAD_MAX_SEC = 1.5
 
 ROLES = ("establish", "dialogue", "reaction", "action", "insert", "closing")
 ROLE_LABEL = {
@@ -219,8 +222,9 @@ def group_beats(beats: list[dict], fps: int = FPS_DEFAULT) -> tuple[list[dict], 
         else:
             roles.append("insert")
 
-    # ③ 裝箱：預設一 beat 一鏡；不足 5.17s 的 beat 先試併相鄰（合併後仍須 ≤ 15.08s），
-    #    真的併不進去才單獨一鏡靠 padSec 補（L4：得用 padSec，不准加台詞／動作湊長度）
+    # ③ 裝箱：預設一 beat 一鏡＝一鏡一事件（這是使用者要的「看得出在演什麼」）。
+    #    不足 5.17s 時**先補 padSec**（停留／呼吸／眼神，不准加台詞或動作），
+    #    只有「補超過 PAD_MAX_SEC 秒會變成空等」時才與相鄰 beat 合併（合併是物理妥協，不是預設）。
     groups: list[list[dict]] = []
     n = len(atoms)
     i = 0
@@ -228,12 +232,11 @@ def group_beats(beats: list[dict], fps: int = FPS_DEFAULT) -> tuple[list[dict], 
         cur = [atoms[i]]
         need = _estimate_group(cur)
         i += 1
-        if need < min_sec:
+        if need < min_sec and (min_sec - need) > PAD_MAX_SEC:
             nxt = _estimate_group([atoms[i]]) if i < n else None
             cand_next = (need + nxt) if nxt is not None else None
             cand_prev = (_estimate_group([atoms[i - 2]]) + need) if (groups and i >= 2) else None
             # 只有合併後「吸附到合法格仍 ≤ 15.08 秒」才算併得進去。
-            # L3：一句台詞一鏡是預設；短句（< 5.17s）可與**相鄰 beat** 合併成一鏡（合併是物理妥協）。
             # 兩邊都併得進去時，優先跟在上一鏡後面（順場次流），除非併前一個會爆長度。
             fits_next = cand_next is not None and legal_frames(cand_next, fps)["legal"] <= FRAME_MAX
             fits_prev = cand_prev is not None and legal_frames(cand_prev, fps)["legal"] <= FRAME_MAX
