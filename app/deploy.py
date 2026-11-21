@@ -612,6 +612,9 @@ def gen_shots_for_scene(project: dict, cfg: dict, chars: list[dict], scenes: lis
     # dialogLineRefs 的第幾句＝**該場 dialogue beat 的序號**（action 不佔號；驗證器也是這樣算的）
     dlg_idx = [i + 1 for i, b in enumerate(beats) if (b.get("type") or "dialogue") != "action"]
     dlg_n = len(dlg_idx)
+    # M12a：台詞引用同時存 beat id（新增時實際寫入的 id）。模型這裡給的 beat 可能還沒有 id，
+    # 先留 null，寫入時（_land_shots）再用實際 beat id 補上。
+    dlg_beat_id = {n: beats[idx - 1].get("id") for n, idx in enumerate(dlg_idx, start=1)}
     scene = next((s for s in scenes if s.get("id") == es.get("sceneId")), None)
     char_by_id = {c["id"]: c for c in chars}
     cast = [char_by_id[cid] for cid in (es.get("characterIds") or []) if cid in char_by_id]
@@ -770,6 +773,7 @@ def gen_shots_for_scene(project: dict, cfg: dict, chars: list[dict], scenes: lis
                          "lighting": str(spec.get("lighting") or "").strip(),
                          "framingRule": storage.V02_FRAMING_RULE},
                 "beats": sb, "dialogLineRefs": refs,
+                "dialogBeatIds": [dlg_beat_id[n] for n in refs if dlg_beat_id.get(n)],
                 "promptZh": str(sh.get("promptZh") or "").strip(),
                 "promptEn": prompt_en,
             })
@@ -864,6 +868,13 @@ def apply_preview(slug: str, preview: dict, overwrite: bool) -> dict:
         eps.append(ep_out)
         # 預覽的場次 id（eNNsMM）→ 實際寫入的 id（eMMsMM），鏡頭跟著改
         id_map = {es["id"]: ep_out["scenes"][i]["id"] for i, es in enumerate(sp.get("scenes") or [])}
+        # M12a：台詞引用改存 beat id，舊的序號引用在這條同步路徑也要換成「實際寫入後的 beat id」
+        beat_id_map: dict[str, str] = {}
+        for i, es in enumerate(sp.get("scenes") or []):
+            raw = [b for b in (es.get("beats") or []) if isinstance(b, dict)]
+            for j, b in enumerate(raw):
+                if b.get("id") and j < len(ep_out["scenes"][i]["beats"]):
+                    beat_id_map[str(b["id"])] = ep_out["scenes"][i]["beats"][j]["id"]
 
         shots_now = project.get("shots")
         if not isinstance(shots_now, list):
@@ -884,6 +895,8 @@ def apply_preview(slug: str, preview: dict, overwrite: bool) -> dict:
                 "promptZh": sh.get("promptZh") or "", "promptEn": sh.get("promptEn") or "",
                 "dialogue": [], "beats": sh.get("beats") or [],
                 "dialogLineRefs": list(sh.get("dialogLineRefs") or []),
+                # M12a：同步寫入 beat id（驗證器與 compile_prompt 優先讀這個）
+                "dialogBeatIds": [beat_id_map[b] for b in (sh.get("dialogBeatIds") or []) if b in beat_id_map],
                 "stageIds": [],
                 "sourceChapterId": sp.get("sourceChapterId") or None,
                 "referencePlan": {"slots": [], "weakReferences": [], "promptPlaceholders": {}},
@@ -964,8 +977,8 @@ def _land_scenes(project: dict, scenes: list[dict]) -> list[str]:
     return out
 
 
-def _land_script(project: dict, sp: dict) -> tuple[dict, dict]:
-    """把一集（場次＋beats）寫進 project，回 (ep_out, 預覽場次 id → 實際 id)。"""
+def _land_script(project: dict, sp: dict) -> tuple[dict, dict, dict]:
+    """把一集（場次＋beats）寫進 project，回 (ep_out, 預覽場次 id → 實際 id, 預覽 beat id → 實際 beat id)。"""
     script = project.setdefault("script", {"episodes": []})
     eps = script.get("episodes")
     if not isinstance(eps, list):
@@ -975,13 +988,18 @@ def _land_script(project: dict, sp: dict) -> tuple[dict, dict]:
     if sp.get("sourceChapterId"):
         ep_out["sourceChapterId"] = sp["sourceChapterId"]
     id_map: dict[str, str] = {}
+    beat_id_map: dict[str, str] = {}
     for i, es in enumerate(sp.get("scenes") or []):
         es_id = f"{ep_id}s{i + 1:02d}"
         beats = []
+        # M12a：preview 內的臨時 beat id → 實際寫入後的 beat id（_land_shots 靠它寫 dialogBeatIds）
         for b in es.get("beats") or []:
-            beats.append({"id": storage.next_id(beats, "b"), "type": b.get("type") or "dialogue",
+            new_bid = storage.next_id(beats, "b")
+            beats.append({"id": new_bid, "type": b.get("type") or "dialogue",
                           "characterId": b.get("characterId") or None, "line": b.get("line") or "",
                           "emotion": b.get("emotion") or "", "notes": b.get("notes") or ""})
+            if b.get("id"):
+                beat_id_map[str(b["id"])] = new_bid
         ep_out["scenes"].append({"id": es_id, "title": es.get("title") or "",
                                  "sceneId": es.get("sceneId") or None,
                                  "characterIds": list(es.get("characterIds") or []),
@@ -989,10 +1007,11 @@ def _land_script(project: dict, sp: dict) -> tuple[dict, dict]:
         if es.get("id"):
             id_map[es["id"]] = es_id
     eps.append(ep_out)
-    return ep_out, id_map
+    return ep_out, id_map, beat_id_map
 
 
-def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map: dict) -> list[str]:
+def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map: dict,
+                beat_id_map: dict | None = None) -> list[str]:
     """把某一場的鏡頭寫進 project（no 重排）。"""
     shots_now = project.get("shots")
     if not isinstance(shots_now, list):
@@ -1005,6 +1024,22 @@ def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map
         es = next((s for s in ep_out["scenes"] if s.get("id") == es_id), None)
         if es is None:
             raise storage.StorageError(f"鏡頭引用不存在的場次 {es_id}")
+        # M12a：dialogBeatIds 用「實際寫入後的 beat id」——模型回的 beat 常常沒 id，
+        # 場次 beat 寫入時才由 _land_script 補；這裡按 beat id 對，對不到就退回台詞序號換算。
+        dlg_beats = [b for b in (es.get("beats") or []) if isinstance(b, dict) and b.get("type") == "dialogue"]
+        by_id = {str(b.get("id")): n for n, b in enumerate(dlg_beats, start=1) if b.get("id")}
+        bmap = beat_id_map or {}
+        refs = [r for r in (sh.get("dialogLineRefs") or []) if isinstance(r, int)]
+        beat_ids: list[str] = []
+        for bid in (sh.get("dialogBeatIds") or []):
+            real = bmap.get(str(bid), str(bid))
+            n = by_id.get(real)
+            if n and n not in refs:
+                refs.append(n)
+            if n:
+                beat_ids.append(real)
+        if not beat_ids:
+            beat_ids = [dlg_beats[n - 1].get("id") for n in sorted(set(refs)) if 1 <= n <= len(dlg_beats)]
         new_shot = {
             "id": storage.next_id(shots_now, "sh"), "no": 0,
             "episodeSceneId": es_id, "sceneId": es.get("sceneId") or None,
@@ -1013,7 +1048,8 @@ def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map
             "durationSec": sh.get("durationSec") or 5,
             "promptZh": sh.get("promptZh") or "", "promptEn": sh.get("promptEn") or "",
             "dialogue": [], "beats": sh.get("beats") or [],
-            "dialogLineRefs": list(sh.get("dialogLineRefs") or []),
+            "dialogLineRefs": sorted(set(refs)),
+            "dialogBeatIds": [b for b in beat_ids if b],
             "stageIds": [],
             "sourceChapterId": sp.get("sourceChapterId") or None,
             "referencePlan": {"slots": [], "weakReferences": [], "promptPlaceholders": {}},
@@ -1106,7 +1142,7 @@ def run_steps_landing(job_id: str, slug: str, cfg: dict, opts: dict,
         timings["script"] = round(time.time() - t, 1)
         done_steps.append("script")
         sp = dict(script["preview"])
-        ep_out, id_map = _land_script(project, sp)
+        ep_out, id_map, beat_id_map = _land_script(project, sp)
         _save_now(slug, project)
         written["episodeScenes"] = len(ep_out["scenes"])
         agg["episodes"] = 1
@@ -1159,7 +1195,7 @@ def run_steps_landing(job_id: str, slug: str, cfg: dict, opts: dict,
             shots_for_es = [{**sh, "episodeSceneId": es["id"], "sceneId": es.get("sceneId")}
                             for sh in res["preview"]["shots"]]
             es["shots"] = shots_for_es
-            ids = _land_shots(project, ep_out, sp, shots_for_es, id_map)
+            ids = _land_shots(project, ep_out, sp, shots_for_es, id_map, beat_id_map)
             _save_now(slug, project)
             written["shots"] += len(ids)
             agg["shots"] += ids

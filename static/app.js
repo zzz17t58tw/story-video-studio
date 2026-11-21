@@ -14,6 +14,7 @@ const state = {
   saving: false,
   dirty: false,
   validateResult: null,  // M3d：最近一次 /validate 的結果（null＝面板收起）
+  dialogMigrationNotes: [],  // M12a：舊台詞引用換算失敗的訊息（後端讀檔時附）
 };
 
 // ── 小工具 ───────────────────────────────────────────────
@@ -147,6 +148,14 @@ async function openProject(slug) {
     state.slug = slug;
     state.project = res.project;
     state.dirty = false;
+    // M12a：後端讀檔時把舊的序號引用換算成 beat id，換算不到的句子會附訊息——要讓使用者看得到
+    const mig = state.project._dialogMigration;
+    if (mig && (mig.notes || []).length) {
+      state.dialogMigrationNotes = mig.notes;
+      setSaveStatus("pending", "台詞引用已自動換算成劇本句子，但有幾筆換算不到（詳見鏡頭卡或劇本頁）");
+    } else {
+      state.dialogMigrationNotes = [];
+    }
     setSaveStatus("saved", `已載入 ${clockText()}`);
   } catch (e) {
     setSaveStatus("error", `開專案失敗：${e.message}`);
@@ -1467,6 +1476,47 @@ function esLabel(es) {
   return `${es.title || "（未命名場次）"}（${es.id}）`;
 }
 
+// ── M12a：鏡頭 ↔ 劇本台詞連動 ────────────────────────────────
+// 為什麼要一套共用函式：鏡頭卡、劇本頁、檢查面板都要用「同一份真相」回答
+// 「這一句台詞被哪些鏡頭引用」，各自算一次會出現兩頁對不上（就是這次要修的症狀）。
+function esDialogueBeats(es) {
+  return ((es && es.beats) || []).filter((b) => b && b.type !== "action" && b.id);
+}
+// 鏡頭 → 台詞 beat id 清單。新欄位優先；舊資料（只有 dialogLineRefs）在這裡即時換算，
+// 舊專案就算沒經過後端遷移也能顯示（後端讀取時已補上，這是第二層保險）。
+function shotDialogBeatIds(sh) {
+  const found = findEpisodeScene(sh.episodeSceneId);
+  const dlg = esDialogueBeats(found && found.es);
+  const ids = Array.isArray(sh.dialogBeatIds) ? sh.dialogBeatIds.filter((x) => typeof x === "string") : [];
+  const refs = Array.isArray(sh.dialogLineRefs) ? sh.dialogLineRefs.filter((n) => Number.isInteger(n)) : [];
+  const want = new Set(ids);
+  refs.forEach((n) => { if (n >= 1 && n <= dlg.length) want.add(dlg[n - 1].id); });
+  return dlg.filter((b) => want.has(b.id)).map((b) => b.id);
+}
+// 場次 → {beatId: [引用它的鏡頭 no...]}（依鏡號排序）
+function beatRefMap(es) {
+  const out = {};
+  const id = es && es.id;
+  (state.project.shots || []).forEach((sh) => {
+    if (sh.episodeSceneId !== id) return;
+    shotDialogBeatIds(sh).forEach((b) => { (out[b] = out[b] || []).push(sh.no); });
+  });
+  Object.values(out).forEach((arr) => arr.sort((a, b) => (a || 0) - (b || 0)));
+  return out;
+}
+// 寫入 dialogBeatIds 時同步重算 dialogLineRefs（後端舊路徑／舊版前端仍讀序號）
+function syncShotDialogRefs(sh) {
+  const found = findEpisodeScene(sh.episodeSceneId);
+  const dlg = esDialogueBeats(found && found.es);
+  const ids = shotDialogBeatIds(sh);
+  sh.dialogBeatIds = ids;
+  sh.dialogLineRefs = ids
+    .map((b) => dlg.findIndex((x) => x.id === b) + 1)
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b);
+}
+
+
 // 集 id：e01、e02…（掃最大號 +1）
 function nextEpisodeId() {
   let max = 0;
@@ -1649,7 +1699,17 @@ function addBeat(es, type) {
   renderScript();
 }
 function removeBeat(es, idx) {
+  const gone = es.beats[idx];
   es.beats.splice(idx, 1);
+  // M12a：刪掉台詞後，引用它的鏡頭要清掉這筆（留著就是失效引用，存檔會被後端擋）
+  if (gone && gone.id) {
+    (state.project.shots || []).forEach((sh) => {
+      if (sh.episodeSceneId === es.id && Array.isArray(sh.dialogBeatIds) && sh.dialogBeatIds.includes(gone.id)) {
+        sh.dialogBeatIds = sh.dialogBeatIds.filter((x) => x !== gone.id);
+        syncShotDialogRefs(sh);
+      }
+    });
+  }
   markDirty();
   renderScript();
 }
@@ -1750,6 +1810,15 @@ function beatRow(es, b, idx) {
     el("span", { class: "hint", text: "顯示：" }),
     el("strong", { class: "beat-who", text: whoText }),
   ));
+  // M12a：這句台詞被哪些鏡頭引用（反過來看劇本頁就知道有沒有鏡頭在演這句）
+  if (isDialogue && b.id) {
+    const refShots = (beatRefMap(es)[b.id] || []);
+    row.append(el("p", { class: refShots.length ? "ref-line beat-refs" : "ref-line beat-refs none" },
+      refShots.length
+        ? el("span", { text: `← 被 ${refShots.map((n) => `sh${String(n).padStart(2, "0")}`).join("、")} 引用` })
+        : el("span", { text: "（尚無鏡頭引用）" }),
+    ));
+  }
   return row;
 }
 
@@ -1843,6 +1912,8 @@ function blankShot(no, esId, extra) {
     promptZh: "",
     promptEn: "",
     dialogue: [],
+    dialogBeatIds: [],
+    dialogLineRefs: [],
     images: { first: "", last: "" },
     video: { path: "", status: "none", taskType: "r2v", seed: 0, note: "" },
     voice: { path: "", engine: "" },
@@ -1899,7 +1970,10 @@ function splitDraftFromScene(esId) {
     sh.characterIds = Array.isArray(es.characterIds) ? [...es.characterIds] : [];
     sh.spec.shotType = isDialogue ? "close_up" : "medium";
     if (isDialogue) {
-      sh.dialogue = [{ characterId: b.characterId || null, line: b.line || "" }];
+      // M12a：主要台詞走「引用劇本句子」；舊的 dialogue 只放原文給人看，不再當成台詞來源
+      sh.dialogBeatIds = b.id ? [b.id] : [];
+      syncShotDialogRefs(sh);
+      sh.dialogue = [];
       sh.promptZh = `《${es.title || es.id}》${charNameById(b.characterId)}${b.emotion ? "（" + b.emotion + "）" : ""}說：「${b.line || ""}」`;
     } else {
       sh.promptZh = `《${es.title || es.id}》動作：${b.line || "（未填）"}${b.notes ? "（" + b.notes + "）" : ""}`;
@@ -2033,7 +2107,72 @@ function shotCard(sh, idx) {
   ));
   card.append(prCard);
 
-  // 對白
+  // M12a：引用劇本台詞（正式台詞的真相在劇本頁的 beat；鏡頭只存 beat id）
+  if (!Array.isArray(sh.dialogBeatIds)) sh.dialogBeatIds = shotDialogBeatIds(sh);
+  if (!Array.isArray(sh.dialogLineRefs)) sh.dialogLineRefs = [];
+  const refCard = el("div", { class: "subcard dialog-ref-card" });
+  refCard.append(el("div", { class: "subcard-head" },
+    el("h4", { text: "引用劇本台詞（dialogBeatIds）" }),
+    el("span", { class: "hint", text: "勾選＝這一鏡演出這幾句劇本台詞（存句子 id，劇本插／刪／搬句都不會錯位）" }),
+  ));
+  const foundForRef = findEpisodeScene(sh.episodeSceneId);
+  const refIds = shotDialogBeatIds(sh);
+  if (!foundForRef) {
+    refCard.append(el("p", { class: "hint warn-text", text: "請先在上面選所屬場次" }));
+  } else {
+    const dlgBeats = esDialogueBeats(foundForRef.es);
+    const refMap = beatRefMap(foundForRef.es);
+    const list = el("div", { class: "dialog-ref-list" });
+    if (!dlgBeats.length) {
+      list.append(el("p", { class: "hint", text: "這個場次還沒有台詞。請先到劇本頁在這一場加「對白」。" }));
+    }
+    dlgBeats.forEach((b, bi) => {
+      const mine = refIds.includes(b.id);
+      const others = (refMap[b.id] || []).filter((n) => n !== sh.no);
+      const cb = el("input", { type: "checkbox" });
+      cb.checked = mine;
+      cb.addEventListener("change", () => {
+        const cur = new Set(shotDialogBeatIds(sh));
+        if (cb.checked) cur.add(b.id); else cur.delete(b.id);
+        sh.dialogBeatIds = [...cur];
+        syncShotDialogRefs(sh);
+        markDirty();
+        renderShots();
+      });
+      const who = b.characterId ? charNameById(b.characterId) : "（旁白／畫外）";
+      const emo = b.emotion ? `（${b.emotion}）` : "";
+      const row = el("label", { class: "dialog-ref-row" },
+        cb,
+        el("span", { class: "dialog-ref-no", text: `第 ${bi + 1} 句` }),
+        el("span", { class: "dialog-ref-who", text: `${who}：` }),
+        el("span", { class: "dialog-ref-line", text: `「${b.line || "（空台詞）"}」${emo}` }),
+      );
+      if (mine) row.append(el("span", { class: "dialog-ref-tag mine", text: "本鏡引用" }));
+      if (!mine && !others.length) row.append(el("span", { class: "dialog-ref-tag none", text: "沒有鏡頭引用" }));
+      if (!mine && others.length) row.append(el("span", { class: "dialog-ref-tag other", text: `被 ${others.map((n) => `sh${String(n).padStart(2, "0")}`).join("、")} 引用` }));
+      list.append(row);
+    });
+    refCard.append(list);
+    // 唯讀區：一眼看到這鏡實際會用哪些台詞（依劇本順序＝演出順序）
+    const readout = el("div", { class: "dialog-ref-readout" });
+    readout.append(el("h5", { text: `本鏡台詞（依引用順序）· ${refIds.length}` }));
+    if (!refIds.length) {
+      readout.append(el("p", { class: "hint", text: "這一鏡目前不引用任何劇本台詞（會當作純畫面）。" }));
+    }
+    refIds.forEach((bid) => {
+      const b = dlgBeats.find((x) => x.id === bid);
+      const n = dlgBeats.findIndex((x) => x.id === bid) + 1;
+      const who = b ? (b.characterId ? charNameById(b.characterId) : "（旁白／畫外）") : "（引用失效）";
+      readout.append(el("p", { class: "dialog-ref-quote" },
+        el("span", { class: "hint", text: `第 ${n} 句 · ${who}：` }),
+        b ? `「${b.line || "（空台詞）"}」` : `找不到句子 ${bid}`,
+      ));
+    });
+    refCard.append(readout);
+  }
+  card.append(refCard);
+
+  // 對白：舊欄位保留（臨時對白），正式台詞請用上面的引用
   const dCard = el("div", { class: "subcard" });
   if (!Array.isArray(sh.dialogue)) sh.dialogue = [];
   dCard.append(el("div", { class: "subcard-head" },
@@ -2047,7 +2186,9 @@ function shotCard(sh, idx) {
       },
     }, "＋ 一句對白"),
   ));
-  if (!sh.dialogue.length) dCard.append(el("p", { class: "hint", text: "這個鏡頭沒有對白（純畫面）。" }));
+  dCard.append(el("p", { class: "hint" },
+    "本鏡臨時對白（不寫進劇本）；正式台詞請用上面的『引用劇本台詞』。"));
+  if (!sh.dialogue.length) dCard.append(el("p", { class: "hint", text: "這個鏡頭沒有臨時對白。" }));
   sh.dialogue.forEach((d, di) => {
     const row = el("div", { class: "dlg-row" });
     row.append(pickSelect("角色（characterId）", d.characterId || null, charOptions(true), (v) => {
