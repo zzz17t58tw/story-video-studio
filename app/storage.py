@@ -676,12 +676,19 @@ def load_project(slug: str) -> dict:
 
 
 def fill_project_defaults_notes(data: dict) -> list[str]:
-    """fill_project_defaults 的旁註版：回台詞引用遷移過程中換算不到的訊息（給前端提示用）。"""
-    return migrate_dialog_linkage(data)
+    """fill_project_defaults 的旁註版（M14a 起）：回台詞引用／分鏡欄位遷移過程的訊息（給前端提示用）。"""
+    notes = migrate_dialog_linkage(data)
+    try:
+        from . import storyboard as _sb  # 延遲匯入：storyboard 會反過來引用本模組
+        notes = _sb.migrate_shot_fields(data) + notes
+    except Exception:  # 遷移只是加值功能，不能讓讀檔失敗
+        pass
+    return notes
 
 
 def save_project(slug: str, data: dict) -> dict:
     """整份寫回（先驗證，再更新 meta.updatedAt，再原子替換）。"""
+    from . import storyboard  # 延遲匯入：storyboard 會反過來引用本模組（避免循環匯入）
     assert_slug(slug)
     if not isinstance(data, dict):
         raise StorageError("project.json 必須是物件")
@@ -691,6 +698,9 @@ def save_project(slug: str, data: dict) -> dict:
     data.pop("_dialogMigration", None)  # 讀取時附給前端的遷移訊息，不寫回檔
     meta["slug"] = slug  # 不讓 body 把 slug 改掉（避免目錄與 slug 分岔）
     strip_llm_api_key(data)  # M3b：API key 永遠不進 project.json
+    # M14a：舊欄位收斂（shot.beats → legacyBeats；不碰 beatIds）——必須在任何驗證之前，
+    # 否則新契約把「只有自由敘述、沒有 beatIds」的舊鏡頭當成缺覆蓋。
+    storyboard.migrate_shot_fields(data)
     # M12a：先把台詞引用正規化（換算／同步 dialogLineRefs），再驗證——
     # 否則只帶舊欄位或只帶新欄位的前端版本會撞到不一致的引用而 400。
     migrate_dialog_linkage(data)
@@ -764,6 +774,8 @@ APPLY_FIELD_WHITELIST = {
         "spec.angle.h", "spec.angle.v", "spec.angle.s",
         "dialogue", "dialogue.*.line", "dialogue.*.characterId",
         "beats",
+        # M14a：分鏡契約欄位（分鏡表可直接改這幾項，改完仍走 validate_project 的 V1–V5）
+        "beatIds", "beatPart", "role", "padSec", "durationSec",
     },
 }
 
@@ -803,7 +815,10 @@ def _apply_allowed(kind: str, path: str) -> bool:
 
 
 def _apply_allowed_list(kind: str) -> list[str]:
-    pool = set(APPLY_FIELD_WHITELIST.get(kind, set())) | set(_APPLY_FIELD_PATTERNS.get(kind, set()))
+    # _APPLY_FIELD_PATTERNS 是「扁平 set」（全部 kind 共用），不是 dict——
+    # 舊寫法 .get(kind) 會在「不允許寫入的欄位」這條錯誤訊息裡炸 AttributeError，
+    # 使用者看到的是 HTTP 500（而不是清楚的 400 與可用欄位清單）。
+    pool = set(APPLY_FIELD_WHITELIST.get(kind, set())) | set(_APPLY_FIELD_PATTERNS)
     return sorted(pool)
 
 
@@ -812,6 +827,9 @@ def _array_key(path: str) -> str | None:
     p = (path or "").strip()
     return p if p in _ARRAY_ITEM_FIELDS else None
 
+
+# 指向 id 的字串陣列（可直接整份覆寫，不像物件陣列要逐項驗欄位）
+_SIMPLE_ID_ARRAYS = {"beatIds", "stageIds", "dialogBeatIds"}
 
 _ELEM_ALIAS = {("chapters", "body"): "content"}  # 章回正文在資料模型叫 content
 
@@ -1220,6 +1238,27 @@ def set_path(obj: dict, path: str, value, mode: str = "replace") -> tuple[object
         drop(obj)
         raise StorageError(f"欄位路徑 {path} 指到陣列元素，請再指定欄位（例如 {path}.promptEn）")
     old = cur.get(leaf)
+    # M14a：字串陣列欄位（beatIds／stageIds）是「指向 id 的清單」，不是物件陣列，
+    # 不能走下面的物件陣列錯誤，也不能當字串塞。結構在這裡驗，覆蓋率交給 validate_project 的 V1／V2。
+    if leaf in _SIMPLE_ID_ARRAYS:
+        if value is None:
+            value = []
+        if not isinstance(value, list):
+            drop(obj)
+            raise StorageError(f"欄位 {path} 必須是字串陣列（例如 [\"b02\", \"b04\"]）")
+        items: list[str] = []
+        for i, x in enumerate(value):
+            if not isinstance(x, (str, int)):
+                drop(obj)
+                raise StorageError(f"{path} 第 {i + 1} 項不是字串（收到 {type(x).__name__}）")
+            s = str(x).strip()
+            if s and s not in items:
+                items.append(s)
+        if mode == "append":
+            base = [str(x) for x in (old or []) if isinstance(x, (str, int))]
+            items = base + [x for x in items if x not in base]
+        cur[leaf] = items
+        return old, items
     if isinstance(old, (dict, list)):
         drop(obj)
         raise StorageError(f"欄位 {path} 是物件／陣列，請指定到更裡面的單一欄位（例如 {path}.promptEn）")
@@ -1357,6 +1396,28 @@ def apply_item_in_memory(data: dict, target: dict, kind: str, path: str, value, 
     return {"path": p, "oldValue": old, "value": new}
 
 
+def _contract_error_signatures(data: dict) -> set[str]:
+    """分鏡契約（h3compose V1–V5 等）的 error 簽章集合。
+
+    storage.validate_project 只是淺層 schema；「漏一句台詞」「長度不合法」這些
+    是 h3compose.validate_project 在管。寫入時要比對「新增的 error」——
+    舊專案本來就有的 error 不該讓使用者連改一個字都被擋。
+    """
+    try:
+        from . import h3compose
+        v = h3compose.validate_project(data)
+    except Exception:
+        return set()
+    return {f"{i.get('scope')}|{i.get('targetId')}|{i.get('message')}"
+            for i in (v.get("issues") or []) if i.get("level") == "error"}
+
+
+def _block_new_contract_errors(before: set[str], data: dict) -> None:
+    new = _contract_error_signatures(data) - before
+    if new:
+        raise StorageError("寫入會造成分鏡契約錯誤（整批未寫入）：" + "；".join(sorted(new))[:600])
+
+
 def apply_to_target_batch(slug: str, kind: str, target_id: str | None, items: list[dict],
                           parent_id: str | None = None) -> dict:
     """M13a：一次套用多個欄位（可能就是結構陣列＋幾個純量）。
@@ -1368,6 +1429,7 @@ def apply_to_target_batch(slug: str, kind: str, target_id: str | None, items: li
         raise StorageError("items 至少要有一項要套用的欄位")
     with _lock:
         data = load_project(slug)
+        baseline = _contract_error_signatures(data)
         # 先把所有路徑／白名單檢查跑完，再動資料（避免前面寫了才發現後面不合法）
         for i, it in enumerate(items):
             if not isinstance(it, dict):
@@ -1390,6 +1452,7 @@ def apply_to_target_batch(slug: str, kind: str, target_id: str | None, items: li
         errors = validate_project(data)
         if errors:
             raise StorageError("寫入後結構不合法（整批未寫入）：" + "；".join(errors))
+        _block_new_contract_errors(baseline, data)
         meta = data["meta"]
         meta["updatedAt"] = now_iso()
         ensure_media_dirs(slug)
@@ -1421,6 +1484,7 @@ def apply_to_target(slug: str, kind: str, target_id: str | None, path: str, valu
     _check_apply_path(kind, path)
     with _lock:
         data = load_project(slug)
+        baseline = _contract_error_signatures(data)
         target, where = locate_target(data, kind, target_id, parent_id)
         warnings: list[str] = []
         done = apply_item_in_memory(data, target, kind, path, value, mode, warnings)
@@ -1428,6 +1492,7 @@ def apply_to_target(slug: str, kind: str, target_id: str | None, path: str, valu
         errors = validate_project(data)
         if errors:
             raise StorageError("；".join(errors))
+        _block_new_contract_errors(baseline, data)
         meta = data["meta"]
         meta["updatedAt"] = now_iso()
         ensure_media_dirs(slug)

@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen, promptrules
+from . import comfy, deploy, h3compose, h3gen, imagegen, llm, prompts, storygen, promptrules, storyboard
 from . import gpu
 from . import assemble as asm
 from . import paths
@@ -996,6 +996,85 @@ def api_validate(slug: str, body: Optional[ValidateBody] = None):
         log.exception("validate 失敗")
         return _fail(400, f"校驗失敗：{type(e).__name__}: {e}")
     return {"ok": True, "slug": slug, **result}
+
+
+# ── M14a：規則式分鏡（劇本 beats → shots；零模型呼叫）────────────────
+class StoryboardBuildBody(BaseModel):
+    """scope="all" 重建全部場次；scope="scene" 只重建 sceneId 這一場。"""
+    scope: str = "all"
+    sceneId: Optional[str] = None
+    force: bool = False            # 連 manual 鏡頭一起覆蓋
+    keepManual: bool = True        # 保留 derivedFrom="manual" 的鏡頭（預設開）
+
+
+@app.get("/api/projects/{slug}/storyboard")
+def api_storyboard_rows(slug: str):
+    """分鏡表（唯讀）：鏡號／職責／誰／台詞逐字／秒數／累計時間。"""
+    data, err = _load_for_m3d(slug)
+    if err:
+        return err
+    try:
+        result = storyboard.storyboard_rows(data)
+    except Exception as e:  # 舊資料也不能把這支弄成 500
+        log.exception("storyboard rows 失敗")
+        return _fail(400, f"讀取分鏡表失敗：{type(e).__name__}: {e}")
+    return {"ok": True, "slug": slug, **result}
+
+
+@app.post("/api/projects/{slug}/storyboard/build")
+def api_storyboard_build(slug: str, body: StoryboardBuildBody):
+    """依劇本 beats 重建分鏡（規則式）。寫檔走 storage.save_project（原子替換＋schema 驗證）。"""
+    data, err = _load_for_m3d(slug)
+    if err:
+        return err
+    scope = (body.scope or "all").strip()
+    if scope not in ("all", "scene"):
+        return _fail(400, f"scope 只能是 all 或 scene（收到 {body.scope!r}）")
+    scene_ids = None
+    if scope == "scene":
+        if not body.sceneId:
+            return _fail(400, "scope=scene 時必須給 sceneId")
+        if not storyboard._find_es(data, body.sceneId):
+            return _fail(404, f"找不到場次 {body.sceneId}")
+        scene_ids = [body.sceneId]
+    # 舊欄位先收斂（beats → legacyBeats），再重建；重建完再跑同一支校驗
+    notes = storyboard.migrate_shot_fields(data)
+    # 重建前先記下「原本就有的錯誤」——重建後新增的契約錯誤才擋寫檔（不因既有問題擋人）
+    before = h3compose.validate_project(data)
+    before_err = {(i.get("scope"), i.get("targetId"), i.get("message")) for i in before["issues"]
+                  if i["level"] == "error"}
+    try:
+        res = storyboard.build_project_storyboard(
+            data, scene_ids=scene_ids, force=bool(body.force),
+            keep_manual=bool(body.keepManual) and not bool(body.force))
+    except Exception as e:
+        log.exception("storyboard build 失敗")
+        return _fail(400, f"自動分鏡失敗：{type(e).__name__}: {e}")
+    if not res["shots"]:
+        return _fail(400, "自動分鏡沒有產出任何鏡頭：" + "；".join(res["warnings"] or ["（沒有可用的 beats）"]))
+    check = h3compose.validate_project(data)
+    new_errors = [i for i in check["issues"] if i["level"] == "error"
+                  and (i.get("scope"), i.get("targetId"), i.get("message")) not in before_err]
+    if new_errors:
+        # 契約 §5：驗不過就不落檔。回 400 讓使用者看得到為什麼（不寫半套資料）
+        return _fail(400, "分鏡結果未通過契約驗證，未寫檔：" + "；".join(
+            f"{i.get('name') or i.get('targetId')}：{i.get('message')}" for i in new_errors[:5]))
+    try:
+        storage.save_project(slug, data)
+    except StorageError as e:
+        return _fail(400, f"分鏡結果沒有落檔（資料不合法）：{e}")
+    rows = storyboard.storyboard_rows(data)
+    return {
+        "ok": True, "slug": slug,
+        "created": res["created"], "replaced": res["replaced"], "kept": res["kept"],
+        "shots": [{k: s.get(k) for k in ("id", "no", "episodeSceneId", "role", "beatIds", "padSec",
+                                         "durationSec", "dialogBeatIds", "characterIds")}
+                  for s in res["shots"]],
+        "warnings": notes + res["warnings"],
+        "skippedScenes": res["skippedScenes"],
+        "totalSeconds": rows["totalSeconds"],
+        "issues": check["issues"], "counts": check["counts"],
+    }
 
 
 # ── 一鍵佈署：故事 → 角色 / 場景 / 劇本 / 鏡頭（只建文字，圖片全空）─────

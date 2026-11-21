@@ -1476,6 +1476,32 @@ function esLabel(es) {
   return `${es.title || "（未命名場次）"}（${es.id}）`;
 }
 
+// ── M14a：分鏡契約（docs/storyboard-contract.md v1）前端配套 ─────────
+// role 六種（契約 §2）；顯示名與後端 app/storyboard.py 的 ROLE_LABEL 一致。
+const SB_ROLE_LABEL = {
+  establish: "建立鏡", dialogue: "對白鏡", reaction: "反應鏡",
+  action: "動作鏡", insert: "插入鏡", closing: "收尾鏡",
+};
+// 幀 ↔ 秒（H3 合法格 17k+5、fps 24；合法域 124–362 幀＝5.17–15.08 秒）
+function sbLegalFrames(sec) {
+  const fps = 24;
+  const raw = Math.round((Number(sec) || 0) * fps);
+  const k = raw >= 5 ? Math.max(0, Math.round((raw - 5) / 17)) : 0;
+  return 17 * k + 5;
+}
+// 這一鏡的 beats（以 beatIds 為準；舊資料退回 dialogBeatIds）
+function shotBeatsOf(sh) {
+  const found = findEpisodeScene(sh.episodeSceneId);
+  const all = ((found && found.es && found.es.beats) || []).filter((b) => b && b.id && !b._skipped);
+  let ids = Array.isArray(sh.beatIds) ? sh.beatIds : [];
+  if (!ids.length) ids = shotDialogBeatIds(sh);
+  const byId = new Map(all.map((b) => [b.id, b]));
+  return { ids, beats: ids.map((id) => byId.get(id)).filter(Boolean), dialogue: esDialogueBeats(found && found.es) };
+}
+function sbFmtSec(v) {
+  return `${Number(v || 0).toFixed(2).replace(/\.00$/, "")}s`;
+}
+
 // ── M12a：鏡頭 ↔ 劇本台詞連動 ────────────────────────────────
 // 為什麼要一套共用函式：鏡頭卡、劇本頁、檢查面板都要用「同一份真相」回答
 // 「這一句台詞被哪些鏡頭引用」，各自算一次會出現兩頁對不上（就是這次要修的症狀）。
@@ -2061,6 +2087,37 @@ function shotCard(sh, idx) {
     el("button", { class: "btn btn-small btn-danger", type: "button", onclick: () => removeShot(sh) }, "刪除"),
   ));
 
+  // M14a：這一鏡的職責與它所演的 beats（beatIds 是真相；台詞逐字取自劇本，不在鏡頭裡另存一份）
+  const sbInfo = shotBeatsOf(sh);
+  const pad = Number(sh.padSec || 0);
+  const roleKey = String(sh.role || "");
+  const sbBox = el("div", { class: `subcard sb-shot-info${roleKey ? ` sb-role-${roleKey}` : ""}` });
+  sbBox.append(el("div", { class: "sb-shot-head" },
+    roleKey
+      ? el("span", { class: `sb-role sb-role-${roleKey}`, text: SB_ROLE_LABEL[roleKey] || roleKey })
+      : el("span", { class: "sb-role sb-role-none", text: "職責未設定" }),
+    el("span", { class: "mono sb-beat-ids", text: sbInfo.ids.length ? `beatIds: ${sbInfo.ids.join(", ")}` : "（本鏡沒有引用 beat：舊資料）" }),
+    sh.beatPart ? el("span", { class: "sb-tag", text: `拆鏡 ${sh.beatPart.part}/${sh.beatPart.total}（beat ${sh.beatPart.beatId}）` }) : null,
+    sh.derivedFrom ? el("span", { class: "hint", text: `來源：${{ storyboard: "規則式分鏡", deploy: "一鍵佈署", manual: "手動" }[sh.derivedFrom] || sh.derivedFrom}` }) : null,
+    el("span", { class: "hint", text: `${sbLegalFrames(sh.durationSec)} 幀／${sh.durationSec || 5}s` }),
+    pad > 0 ? el("span", { class: "hint warn-text", text: `（其中 ${sbFmtSec(pad)} 為留白：停留／呼吸／環境）` }) : null,
+    sbInfo.ids.length > 1 ? el("span", { class: "sb-tag", text: `合併 ${sbInfo.ids.length} 句（H3 最短 5.17 秒）` }) : null,
+  ));
+  if (sbInfo.beats.length) {
+    const ul = el("ul", { class: "sb-beat-list" });
+    for (const b of sbInfo.beats) {
+      const isDlg = b.type !== "action";
+      ul.append(el("li", {},
+        el("span", { class: "hint", text: `${b.id} · ${isDlg ? (b.characterId ? charNameById(b.characterId) : "（旁白／畫外）") : "動作"}${b.emotion ? `（${b.emotion}）` : ""}：` }),
+        el("span", { text: isDlg ? `「${b.line || "（空台詞）"}」` : (b.line || "（未填動作）") }),
+      ));
+    }
+    sbBox.append(ul);
+  } else {
+    sbBox.append(el("p", { class: "hint", text: "這一鏡沒有 beatIds。按上方「🎬 由劇本自動分鏡」重建，或到下方「引用劇本台詞」勾選句子。" }));
+  }
+  card.append(sbBox);
+
   // 基本
   const base = el("div", { class: "field-grid" });
   const noIn = el("input", { type: "number", min: "1", step: "1" });
@@ -2098,14 +2155,51 @@ function shotCard(sh, idx) {
   sg.append(field("運鏡（cameraMove）", spec, "cameraMove", "例如：緩慢推近、手持跟拍", false));
   sg.append(field("構圖（composition）", spec, "composition", "例如：中心構圖、三分法、前景遮擋", false));
   sg.append(field("光線（lighting）", spec, "lighting", "例如：側逆光、燭光主光", false));
-  const dur = el("input", { type: "number", min: "1", max: "60", step: "1" });
+  const dur = el("input", { type: "number", min: "1", max: "60", step: "0.01" });
   dur.value = String(sh.durationSec ?? 5);
   dur.addEventListener("input", () => {
     const v = parseFloat(dur.value || "5");
     sh.durationSec = Number.isFinite(v) && v > 0 ? v : 5;
     markDirty();
   });
+  // 契約 V3：合法格只有 17k+5 幀（124–362）；一按就吸附，免得存檔被校驗擋
+  const snapBtn = el("button", { class: "btn btn-small", type: "button", title: "吸附到最近的 H3 合法格（17k+5 幀、124–362）" }, "吸附合法格");
+  snapBtn.addEventListener("click", () => {
+    const f = sbLegalFrames(sh.durationSec);
+    if (f < 124 || f > 362) {
+      alert(`吸附後是 ${f} 幀，超出自動可修的範圍（合法域 124–362 幀＝5.17–15.08 秒）。請拆鏡或改長度。`);
+      return;
+    }
+    sh.durationSec = Number((f / 24).toFixed(2));
+    const need = Number(sh.padSec || 0);
+    if (need > sh.durationSec) sh.padSec = 0;
+    markDirty();
+    renderShots();
+    setSaveStatus("pending", `長度已吸附到 ${f} 幀（${sh.durationSec}s），待儲存…`);
+  });
   sg.append(el("label", { class: "field" }, el("span", { text: "長度秒數（durationSec）" }), dur));
+  sg.append(el("label", { class: "field" }, el("span", { text: "留白秒數（padSec，純停留不算劇情）" }),
+    (() => {
+      const padIn = el("input", { type: "number", min: "0", max: "14", step: "0.01" });
+      padIn.value = String(sh.padSec || 0);
+      padIn.addEventListener("input", () => {
+        const v = parseFloat(padIn.value || "0");
+        sh.padSec = Number.isFinite(v) && v > 0 ? v : 0;
+        markDirty();
+      });
+      return padIn;
+    })()));
+  sg.append(pickSelect("職責（role，契約 V5）", sh.role || "", [
+    { value: "", text: "（未設定）" },
+    ...Object.entries(SB_ROLE_LABEL).map(([v, t]) => ({ value: v, text: `${t}（${v}）` })),
+  ], (v) => { sh.role = v || null; markDirty(); renderShots(); }));
+  sg.append(el("div", { class: "field" }, el("span", { text: "影格自檢" }),
+    el("div", { class: "row wrap" },
+      el("span", { class: "hint mono", text: `${sbLegalFrames(sh.durationSec)} 幀` }),
+      (sbLegalFrames(sh.durationSec) < 124 || sbLegalFrames(sh.durationSec) > 362)
+        ? el("span", { class: "hint err-text", text: "不在 124–362（校驗會報 V3 錯誤）" })
+        : null,
+      snapBtn)));
   specCard.append(sg);
   card.append(specCard);
 
@@ -3237,6 +3331,192 @@ function paintBatchPanel() {
   }
 }
 
+// ── M14a：分鏡表 ＋「由劇本自動分鏡」────────────────────────────
+// 資料真相仍是 project.shots；分鏡表是同一份資料的另一種呈現（由上往下讀即整齣戲）。
+// 自動分鏡一律走後端 POST /storyboard/build（純規則、零模型），回來後重抓專案 + 分鏡表。
+const sbState = { panel: false, result: null, rows: null };
+
+// 分鏡表表格：鏡號｜職責｜誰｜台詞（逐字，動作鏡給動作）｜秒數（含留白）｜累計
+function storyboardTable(rows) {
+  const wrap = el("div", { class: "card sb-table-card" });
+  const total = Number(rows.totalSeconds || 0);
+  wrap.append(el("div", { class: "card-head" },
+    el("h3", { text: "🎬 分鏡表" }),
+    el("span", { class: "hint", text: `${rows.shotCount || 0} 鏡 · 總長 ${sbFmtSec(total)} · 由上往下讀就是整齣戲` }),
+    el("span", { class: "spacer" }),
+    el("span", { class: "hint", text: "點列可捲到對應鏡頭卡" }),
+  ));
+  if (!rows || !(rows.rows || []).length) {
+    wrap.append(el("p", { class: "hint", text: "尚未分鏡。按上方「🎬 由劇本自動分鏡」依劇本 beats 產生。" }));
+    return wrap;
+  }
+  const table = el("table", { class: "m3d-table sb-table" });
+  table.append(el("thead", {},
+    el("tr", {},
+      el("th", { text: "鏡號" }), el("th", { text: "職責" }), el("th", { text: "誰" }),
+      el("th", { text: "台詞（逐字）／動作" }), el("th", { text: "秒數" }), el("th", { text: "累計" }),
+    )));
+  const tbody = el("tbody", {});
+  let lastScene = "__init__";
+  for (const r of rows.rows) {
+    if (r.episodeSceneId !== lastScene) {
+      lastScene = r.episodeSceneId;
+      tbody.append(el("tr", { class: "sb-scene-row" },
+        el("td", { colspan: "6", text: `— ${r.sceneTitle || "（未命名場次）"}（${r.episodeSceneId}）` })));
+    }
+    const isDlg = !!r.hasLine;
+    const lineText = isDlg
+      ? r.lines.filter((x) => x.type !== "action").map((x) => `${x.speaker}：「${x.text}」`).join("　")
+      : (r.lines.map((x) => x.text).join("／") || r.text || "");
+    const merged = (r.mergedCount || 0) > 1;
+    const tdLine = el("td", { class: "sb-line" }, el("span", { text: lineText || "（無台詞／動作）" }));
+    const tdDur = el("td", { class: "mono" },
+      el("div", { text: sbFmtSec(r.durationSec) }),
+      r.padSec > 0 ? el("div", { class: "hint", text: `留白 ${sbFmtSec(r.padSec)}` }) : null,
+      merged ? el("span", { class: "sb-tag", text: `合併 ${r.mergedCount} 句` }) : null,
+    );
+    tbody.append(el("tr", {
+      class: "sb-row" + (isDlg ? "" : " sb-row-action"),
+      title: "點一下捲到這張鏡頭卡",
+      onclick: () => {
+        setSaveStatus("saved", `跳到第 ${r.no} 鏡…`);
+        if (state.shotFilter && state.shotFilter !== r.episodeSceneId) { state.shotFilter = ""; renderShots(); }
+        const node = document.getElementById(`shot-${r.shotId}`);
+        if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
+      },
+    },
+      el("td", { class: "mono", text: `${String(r.no).padStart(2, "0")}${r.shotId ? ` · ${r.shotId}` : ""}` }),
+      el("td", {}, el("span", { class: `sb-role sb-role-${r.role || "none"}`, text: r.roleLabel || "（未設定）" })),
+      el("td", { text: r.chars || r.speaker || "—" }),
+      tdLine,
+      tdDur,
+      el("td", { class: "mono", text: `${sbFmtSec(r.startSec)} → ${sbFmtSec(r.endSec)}` }),
+    ));
+  }
+  table.append(tbody);
+  wrap.append(table);
+  return wrap;
+}
+
+// 「由劇本自動分鏡」小面板：範圍（全部／單一場次）＋保留手動鏡頭
+function sbBuildPanel() {
+  const card = el("div", { class: "card sb-panel" });
+  card.append(el("div", { class: "card-head" },
+    el("h3", { text: "🎬 由劇本自動分鏡" }),
+    el("span", { class: "hint", text: "依 docs/storyboard-contract.md：一鏡一事件、長度吸附 H3 合法格、台詞逐字照抄（純規則，不呼叫模型）" }),
+  ));
+  const scopeSel = el("select", { class: "inline-select" },
+    el("option", { value: "all", text: "全部場次" }),
+    ...episodeSceneOptions(false).map((o) => el("option", { value: `scene:${o.value}`, text: `單一場次：${o.text}` })));
+  const keepChk = el("input", { type: "checkbox" });
+  keepChk.checked = true;
+  const forceChk = el("input", { type: "checkbox" });
+  forceChk.checked = false;
+  keepChk.addEventListener("change", () => { if (keepChk.checked) forceChk.checked = false; });
+  forceChk.addEventListener("change", () => { if (forceChk.checked) keepChk.checked = false; });
+
+  const runBtn = el("button", { class: "btn btn-small btn-primary", type: "button" }, "開始分鏡");
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = "分鏡中…";
+    try {
+      await buildStoryboard(scopeSel.value, keepChk.checked, forceChk.checked);
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = "開始分鏡";
+    }
+  });
+  card.append(el("div", { class: "row wrap" },
+    el("span", { class: "hint", text: "範圍：" }), scopeSel,
+    el("label", { class: "hint inline-check" }, keepChk, el("span", { text: "保留手動調整過的鏡頭" })),
+    el("label", { class: "hint inline-check" }, forceChk, el("span", { text: "覆蓋手動鏡頭（force）" })),
+    el("span", { class: "spacer" }),
+    runBtn,
+  ));
+  if (state.project && (state.project.shots || []).length) {
+    card.append(el("p", { class: "hint", text: "提醒：重建會換掉「非手動」的舊鏡頭（含一鍵佈署產的），已在該鏡生過的影格／影片路徑不會跟著搬。" }));
+  }
+  if (sbState.result) card.append(sbResultBox(sbState.result));
+  return card;
+}
+
+function sbResultBox(res) {
+  const ok = !res.__error;
+  const box = el("div", { class: "subcard sb-result" });
+  if (!ok) {
+    box.append(el("p", { class: "err-text", text: `分鏡失敗：${res.__error}` }));
+    return box;
+  }
+  box.append(el("div", { class: "subcard-head" },
+    el("h4", { text: "分鏡結果" }),
+    el("span", { class: "hint ok-text", text: `新增 ${res.created || 0} 鏡 · 保留 ${res.kept || 0} 鏡 · 總長 ${sbFmtSec(res.totalSeconds || 0)}` }),
+    el("span", { class: "spacer" }),
+    el("span", { class: `hint ${(res.counts && res.counts.error) ? "err-text" : "ok-text"}`,
+      text: `校驗：${(res.counts && res.counts.error) || 0} 錯誤 / ${(res.counts && res.counts.warn) || 0} 警告` }),
+    el("button", { class: "btn btn-small", type: "button", onclick: () => { sbState.result = null; renderShots(); } }, "收起"),
+  ));
+  for (const w of res.warnings || []) box.append(el("p", { class: "hint warn-text", text: `⚠ ${w}` }));
+  const errs = (res.issues || []).filter((i) => i.level === "error");
+  for (const e of errs.slice(0, 12)) {
+    box.append(el("p", { class: "hint err-text", text: `✗ ${e.name || e.scope}：${e.message}` }));
+  }
+  if (errs.length > 12) box.append(el("p", { class: "hint err-text", text: `…另有 ${errs.length - 12} 個錯誤，按「✓ 檢查全專案」看全部` }));
+  return box;
+}
+
+async function buildStoryboard(scopeValue, keepManual, force) {
+  const isScene = String(scopeValue || "").startsWith("scene:");
+  const body = {
+    scope: isScene ? "scene" : "all",
+    sceneId: isScene ? scopeValue.slice(6) : null,
+    force: !!force,
+    keepManual: keepManual !== false,
+  };
+  try {
+    await saveNow();  // 先把畫面上的編輯存回去，分鏡才不會吃掉未存的改動
+    const res = await api(`/api/projects/${state.slug}/storyboard/build`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    sbState.result = res;
+    sbState.panel = true;   // 讓「分鏡結果」面板留在畫面上
+    state.validateResult = { issues: res.issues || [], counts: res.counts || { error: 0, warn: 0 }, checked: {}, at: "" };
+    await reloadProject();
+    setSaveStatus("saved", `自動分鏡完成：新增 ${res.created || 0} 鏡、保留 ${res.kept || 0} 鏡`);
+  } catch (e) {
+    sbState.result = { __error: e.message };
+    setSaveStatus("error", `自動分鏡失敗：${e.message}`);
+    renderShots();
+    alert(`自動分鏡失敗：${e.message}`);
+  }
+}
+
+async function reloadProject() {
+  const data = await api(`/api/projects/${state.slug}`);
+  state.project = data.project || data;
+  state.dirty = false;
+  if (typeof renderProjectList === "function") { /* 列表由呼叫端決定是否重畫 */ }
+  renderShots();
+}
+
+async function loadStoryboardRows() {
+  try {
+    sbState.rows = await api(`/api/projects/${state.slug}/storyboard`);
+  } catch (e) {
+    sbState.rows = { rows: [], shotCount: 0, totalSeconds: 0, __error: e.message };
+  }
+  const node = document.getElementById("sb-table-host");
+  if (node) {
+    node.textContent = "";
+    if (sbState.rows.__error) {
+      node.append(el("p", { class: "hint err-text", text: `讀取分鏡表失敗：${sbState.rows.__error}` }));
+    } else {
+      node.append(storyboardTable(sbState.rows));
+    }
+  }
+}
+
 // ── 鏡頭分頁入口 ─────────────────────────────────────────
 function renderShots() {
   const box = $("#view-shots");
@@ -3246,7 +3526,7 @@ function renderShots() {
   renumberShots();  // no 一律照陣列順序連號
 
   box.append(el("h2", { class: "view-title", text: "5 · 鏡頭" }));
-  box.append(el("p", { class: "hint", text: `分鏡表 · ${list.length} 個鏡頭。可用場次篩選，或用「由場次拆鏡頭草稿」把劇本的 beats 一鍵變成鏡頭（純規則，不呼叫模型）。` }));
+  box.append(el("p", { class: "hint", text: `分鏡表 · ${list.length} 個鏡頭。可用場次篩選；「🎬 由劇本自動分鏡」依劇本 beats 一鍵產生分鏡（純規則，不呼叫模型）。` }));
 
   // 工具列
   const filterSel = el("select", { class: "inline-select" },
@@ -3264,7 +3544,12 @@ function renderShots() {
     el("div", { class: "row wrap" },
       el("span", { class: "hint", text: "篩選場次：" }), filterSel,
       el("span", { class: "spacer" }),
-      el("button", { class: "btn btn-small", type: "button", title: "跑 data-model v0.2 的五條機械校驗（純邏輯，零 API 成本）", onclick: () => runValidate() }, "✓ 檢查全專案"),
+      el("button", {
+        class: "btn btn-small btn-primary", type: "button", id: "btn-sb-build",
+        title: "依 docs/storyboard-contract.md 把劇本 beats 派生成分鏡（純規則，不呼叫模型）",
+        onclick: () => { sbState.panel = !sbState.panel; if (sbState.panel) sbState.result = null; renderShots(); },
+      }, "🎬 由劇本自動分鏡"),
+      el("button", { class: "btn btn-small", type: "button", title: "跑機械校驗（含分鏡契約 V1–V5；純邏輯，零 API 成本）", onclick: () => runValidate() }, "✓ 檢查全專案"),
       el("button", { class: "btn btn-small btn-primary", type: "button", onclick: () => addShot(filterSel.value) }, "＋ 新增鏡頭"),
     ),
     batchToolbarRow(filterSel.value),
@@ -3274,6 +3559,11 @@ function renderShots() {
       el("span", { class: "hint", text: "每 beat 一鏡；對白帶入台詞，場景與人物繼承該場次；已存在的鏡頭不會被覆蓋或刪除。" }),
     ),
   ));
+
+  // M14a：「由劇本自動分鏡」面板（按下 🎬 才展開）＋分鏡表（由上往下讀＝整齣戲）
+  if (sbState.panel) box.append(sbBuildPanel());
+  const sbHost = el("div", { id: "sb-table-host" }, el("p", { class: "hint", text: "分鏡表載入中…" }));
+  box.append(sbHost);
 
   // M4b：批次生圖進度面板（有任務才顯示；每 2 秒 poll 更新）
   // 注意：要在 div 已經插進 DOM 之後才 paint（paintBatchPanel 用 querySelector 找 #batch-panel，
@@ -3292,8 +3582,9 @@ function renderShots() {
   if (!filtered.length) {
     box.append(el("div", { class: "card placeholder-card" },
       el("h3", { text: state.shotFilter ? "這個場次還沒有鏡頭" : "尚無鏡頭" }),
-      el("p", { class: "hint", text: "用上方「由場次拆鏡頭草稿」從劇本 beats 一次拆出來，或按「＋ 新增鏡頭」手動加。" }),
+      el("p", { class: "hint", text: "按上方「🎬 由劇本自動分鏡」依劇本 beats 一次產生，或按「＋ 新增鏡頭」手動加。" }),
     ));
+    loadStoryboardRows();
     return;
   }
   // 場次分組標題（有篩選時就不重複顯示）
@@ -3312,6 +3603,7 @@ function renderShots() {
     card.id = `shot-${sh.id}`;
     box.append(card);
   }
+  loadStoryboardRows();
 }
 
 function idxOfShot(sh) {
