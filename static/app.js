@@ -4585,71 +4585,142 @@ async function createProject() {
 const CHAT_TASKS = {
   story: [
     { id: "story_outline", label: "① 擴寫成完整大綱",
-      prompt: (m) => `請把目前的故事概念擴寫成完整大綱（約 600–1000 字）。\n目前的概念是：「${m.premise || "（尚未填寫，請自行提出一個合理的概念）"}」\n若已有大綱，請以它為骨幹整理並補強，直接給我完整版本。` },
+      prompt: (m) => `請把目前的故事概念擴寫成完整大綱（約 600–1000 字）。\n目前的概念是：「${m.premise || "（尚未填寫，請自行提出一個合理的概念）"}」\n若已有大綱，請以它為骨幹整理並補強，直接給我完整版本。`,
+      applyHint: { fields: ["synopsis"], target: "故事大綱" } },
     { id: "story_chapters", label: "② 依大綱寫成章回",
-      prompt: (m) => `請依目前的大綱寫成章回正文，共 3 回，每回 500–800 字，開頭用「第 N 回　標題」。\n大綱：\n${m.synopsis || "（目前沒有大綱，請先自行擬定一個再寫）"}` },
-    { id: "story_style", label: "③ 調整風格", prompt: () => "請依這個故事給出風格設定建議（類型／基調／視覺風格／負向提示），每項一行。" },
+      prompt: (m) => `請依目前的大綱寫成章回正文，共 3 回，每回 500–800 字，開頭用「第 N 回　標題」。\n大綱：\n${m.synopsis || "（目前沒有大綱，請先自行擬定一個再寫）"}`,
+      applyHint: { fields: ["chapters"], multi: true, target: "整份章回" } },
+    { id: "story_style", label: "③ 調整風格", prompt: () => "請依這個故事給出風格設定建議（類型／基調／視覺風格／負向提示），每項一行。",
+      applyHint: { fields: ["style"], multi: true, target: "風格四項" } },
     { id: "custom", label: "調整這份大綱…",
-      prompt: () => "請在保持原有設定的前提下，把大綱的節奏改得更緊湊，並讓結尾和開頭的首尾呼應：" },
+      prompt: () => "請在保持原有設定的前提下，把大綱的節奏改得更緊湊，並讓結尾和開頭的首尾呼應：",
+      applyHint: { fields: ["synopsis"], target: "故事大綱" } },
   ],
   character: [
     { id: "character_look", label: "① 生成外型（含 promptEn）",
-      prompt: (c) => `請為人物「${c.name || c.id}」（定位：${c.role || "未設定"}）生成外型：五官、髮型、體型、辨識特徵，\n並在第二段寫出可以直接餵生圖的英文 promptEn。` },
+      prompt: (c) => `請為人物「${c.name || c.id}」（定位：${c.role || "未設定"}）生成外型：五官、髮型、體型、辨識特徵，\n並在第二段寫出可以直接餵生圖的英文 promptEn。`,
+      applyHint: { fields: ["appearance.promptEn", "appearance.face", "appearance.hair", "appearance.body", "appearance.skin"],
+        multi: true, target: "外型四欄＋promptEn" } },
     { id: "character_outfit", label: "② 生成服裝",
-      prompt: (c) => `請為「${c.name || c.id}」設計一套符合世界觀的日常服裝，並附英文 promptEn。` },
+      prompt: (c) => `請為「${c.name || c.id}」設計一套符合世界觀的日常服裝，並附英文 promptEn。`,
+      applyHint: { fields: ["outfits"], multi: true, target: "服裝" } },
     { id: "character_background", label: "③ 生成身世背景",
-      prompt: (c) => `請為「${c.name || c.id}」補完身世背景：出身、個性、目標、秘密（各 2–4 句）。` },
+      prompt: (c) => `請為「${c.name || c.id}」補完身世背景：出身、個性、目標、秘密（各 2–4 句）。`,
+      applyHint: { fields: ["background"], multi: true, target: "身世四欄" } },
     { id: "character_voice", label: "④ 建議聲音音色",
-      prompt: (c) => `依「${c.name || c.id}」的外型與個性，建議 3 個適合的配音音色，並說明各自的演出方式。` },
+      prompt: (c) => `依「${c.name || c.id}」的外型與個性，建議 3 個適合的配音音色，並說明各自的演出方式。`,
+      applyHint: { fields: ["voice.desc"], target: "音色描述", variants: true } },
     { id: "custom", label: "幫我改一下這個人物…",
-      prompt: () => "請調整這個角色的設定，讓它更有記憶點，但不要推翻已填好的內容：" },
+      prompt: () => "請調整這個角色的設定，讓它更有記憶點，但不要推翻已填好的內容：",
+      applyHint: { fields: ["appearance.promptEn", "appearance.face", "appearance.hair", "appearance.body", "appearance.skin"],
+        multi: true, target: "外型四欄＋promptEn" } },
   ],
   scene: [
     { id: "scene_expand", label: "① 擴寫場景描述",
-      prompt: (s) => `請把場景「${s.name || s.id}」擴寫成 150–300 字的可拍描述：時間、光線、氣氛、具體物件、環境音。` },
+      prompt: (s) => `請把場景「${s.name || s.id}」擴寫成 150–300 字的可拍描述：時間、光線、氣氛、具體物件、環境音。`,
+      applyHint: { fields: ["desc"], target: "場景描述" } },
     { id: "scene_prompt_en", label: "② 生成英文 promptEn",
-      prompt: (s) => `請把場景「${s.name || s.id}」寫成一段英文生圖 prompt（comma-separated，一段到底）。` },
+      prompt: (s) => `請把場景「${s.name || s.id}」寫成一段英文生圖 prompt（comma-separated，一段到底）。`,
+      applyHint: { fields: ["promptEn"], target: "英文 promptEn" } },
     { id: "custom", label: "調整這個場景…",
-      prompt: () => "請讓這個場景更有記憶點、更能一眼認出，但保持原本的時間與光線設定：" },
+      prompt: () => "請讓這個場景更有記憶點、更能一眼認出，但保持原本的時間與光線設定：",
+      applyHint: { fields: ["desc"], target: "場景描述" } },
   ],
   // ── M3b：劇本場次／beat ────────────────────────────────────
   episodeScene: [
     { id: "episode_scene_dialogue", label: "① 寫成完整對白",
       prompt: (es) => `請把場次「${es.title || es.id}」寫成完整對白，只保留這一場現有的角色，`
-        + `依現有 beats 的順序與類型改寫，每句一行「角色名：台詞」，情緒／動作用全形括號附在台詞後。` },
+        + `依現有 beats 的順序與類型改寫，每句一行「角色名：台詞」，情緒／動作用全形括號附在台詞後。`,
+      applyHint: { fields: ["beats"], multi: true, target: "整場 beats" } },
     { id: "episode_scene_rewrite", label: "② 改寫得更口語／更有張力",
       prompt: (es) => `請把場次「${es.title || es.id}」改寫得更口語、更有張力：保留原有角色與劇情走向，`
-        + `句子縮短、關鍵資訊延後揭曉，輸出整場（含所有 beats）的完整版本。` },
+        + `句子縮短、關鍵資訊延後揭曉，輸出整場（含所有 beats）的完整版本。`,
+      applyHint: { fields: ["beats"], multi: true, target: "整場 beats" } },
     { id: "episode_scene_action", label: "③ 加動作描述",
       prompt: (es) => `請為場次「${es.title || es.id}」的每句對白補上具體可拍的動作描述，`
-        + `每句一行「角色名（動作）：台詞」；沒有台詞的節奏用「（動作：…）」單獨一行。` },
+        + `每句一行「角色名（動作）：台詞」；沒有台詞的節奏用「（動作：…）」單獨一行。`,
+      applyHint: { fields: ["beats"], multi: true, target: "整場 beats" } },
     { id: "custom", label: "調整這一場…",
-      prompt: () => "請在保留現有角色與劇情的前提下調整這一場：\n" },
+      prompt: () => "請在保留現有角色與劇情的前提下調整這一場：\n",
+      applyHint: { fields: ["beats"], multi: true, target: "整場 beats" } },
   ],
   beat: [
     { id: "beat_rewrite", label: "① 改寫這句台詞",
       prompt: (b) => `請改寫這句台詞（情緒：${b.emotion || "請你判斷最合適的情緒"}）：`
-        + `「${b.line || "（空）"}」\n只回那一句台詞本身，不要角色名、不要引號、不要說明。` },
+        + `「${b.line || "（空）"}」\n只回那一句台詞本身，不要角色名、不要引號、不要說明。`,
+      applyHint: { fields: ["line"], target: "台詞（line）" } },
     { id: "beat_variants", label: "② 三個版本的台詞",
       prompt: (b) => `請給這句台詞三個版本（更口語／更有張力／更含蓄），資訊量與原句相同：「${b.line || "（空）"}」`
-        + `\n每版一行「1. 台詞（風格）」，不要角色名或開場白。` },
+        + `\n每版一行「1. 台詞（風格）」，不要角色名或開場白。`,
+      applyHint: { fields: ["line"], target: "台詞（line）", variants: true } },
     { id: "custom", label: "調整這一句…",
-      prompt: () => "請把這句台詞改成：\n" },
+      prompt: () => "請把這句台詞改成：\n",
+      applyHint: { fields: ["line"], target: "台詞（line）" } },
   ],
   // ── M3b：鏡頭（H3 六段式）────────────────────────────────
   shot: [
     { id: "shot_prompt_h3", label: "① 寫 H3 六段式英文 promptEn",
       prompt: (sh) => `請依現有設定寫出第 ${sh.no} 鏡的英文 promptEn（H3 六段式）：主體定義／動作／鏡頭語言／光影／氛圍／音訊，`
-        + `每段一行、以「1. Subject:」到「6. Audio:」開頭，只回英文。` },
+        + `每段一行、以「1. Subject:」到「6. Audio:」開頭，只回英文。`,
+      applyHint: { fields: ["promptEn"], target: "英文 promptEn" } },
     { id: "shot_prompt_en_from_zh", label: "② 把 promptZh 翻成 promptEn",
       prompt: (sh) => `請把下面的中文提示翻成英文 H3 六段式 promptEn（中文沒寫到的段落用 spec／場景卡／人物卡補齊）：`
-        + `\n${sh.promptZh || "（promptZh 目前是空的，請依 spec 與人物、場景設定自行描述這個鏡頭）"}` },
+        + `\n${sh.promptZh || "（promptZh 目前是空的，請依 spec 與人物、場景設定自行描述這個鏡頭）"}`,
+      applyHint: { fields: ["promptEn"], target: "英文 promptEn" } },
     { id: "shot_check_consistency", label: "③ 檢查與人物卡是否矛盾",
-      prompt: () => "請檢查這個鏡頭的 promptEn 與人物卡／場景卡設定是否矛盾，逐條列出並給建議改法。" },
+      prompt: () => "請檢查這個鏡頭的 promptEn 與人物卡／場景卡設定是否矛盾，逐條列出並給建議改法。",
+      applyHint: null, adviceOnly: "僅建議，不回填" },
     { id: "custom", label: "調整這個鏡頭…",
-      prompt: () => "請在保留人物與場景設定的前提下調整這個鏡頭：" },
+      prompt: () => "請在保留人物與場景設定的前提下調整這個鏡頭：",
+      applyHint: { fields: ["promptEn"], target: "英文 promptEn" } },
   ],
 };
+
+// M13b：任務 → 回填目標。applyHint 形狀：
+//   { fields: [...], multi?: true, target: "顯示用的短名", variants?: true }
+//   多欄格子（chapters／style／background／outfits／beats）直接用格子的 path；
+//   單欄用 apply-batch 的欄位路徑（synopsis／desc／promptEn／line／voice.desc／appearance.*）。
+//   applyHint: null ＝ 這個任務只給建議、不回填（UI 會明說）。
+function chatTaskById(kind, id) {
+  return (CHAT_TASKS[kind] || []).find((t) => t.id === id) || null;
+}
+
+// 找出 applyHint.fields 裡哪些是「多欄格子」、哪些是「單欄」
+function splitHintFields(t, hint) {
+  const specs = multiApplyFieldsFor(t);
+  const multiByPath = {};
+  for (const s of specs) multiByPath[s.path] = s;
+  const multi = [];
+  const plain = [];
+  for (const f of (hint && hint.fields) || []) {
+    if (multiByPath[f]) multi.push(multiByPath[f]);
+    else plain.push(f);
+  }
+  return { multi, plain };
+}
+
+function applyHintLabel(hint) {
+  if (!hint) return "";
+  return hint.target || (hint.fields || []).join("、");
+}
+
+// M13b：applyHint 用到的單欄路徑 → 中文標籤（不依賴目標卡片是否載入）
+const HINT_FIELD_LABELS = {
+  synopsis: "故事大綱（synopsis）",
+  desc: "場景描述（desc）",
+  promptEn: "英文提示（promptEn）",
+  line: "台詞／動作（line）",
+  "voice.desc": "音色描述（voice.desc）",
+  "appearance.promptEn": "英文外型 prompt（appearance.promptEn）",
+  "appearance.face": "臉型五官（appearance.face）",
+  "appearance.hair": "髮型髮色（appearance.hair）",
+  "appearance.body": "體型（appearance.body）",
+  "appearance.skin": "膚色（appearance.skin）",
+};
+function hintFieldLabel(list, path) {
+  const hit = (list || []).find(([p]) => p === path);
+  return (hit && hit[1]) || HINT_FIELD_LABELS[path] || path;
+}
 
 // 卡片 → 可套用的欄位（路徑一律用點分；appearance/voice 等物件在缺時後端會自動建）
 // M3b：後端有白名單（storage.APPLY_FIELD_WHITELIST），這裡只決定下拉顯示什麼。
@@ -4999,8 +5070,13 @@ function renderChatTasks() {
   const list = CHAT_TASKS[t.kind] || [];
   box.append(el("span", { class: "hint", text: "預設任務：" }));
   for (const task of list) {
+    const to = task.applyHint ? `→ 回填：${applyHintLabel(task.applyHint)}` : (task.adviceOnly ? `→ ${task.adviceOnly}` : "");
     const btn = el("button", {
-      class: "chip", type: "button", title: "把這個任務的提示詞填進輸入框（可先改再送）",
+      class: "chip" + (task.applyHint ? " chip-hasapply" : "") + (task.applyHint === null ? " chip-advice" : ""),
+      type: "button",
+      title: task.applyHint
+        ? `把這個任務的提示詞填進輸入框（可先改再送）；送完按「⇣ 回填到 ${applyHintLabel(task.applyHint)}」一鍵寫回`
+        : (task.adviceOnly || "把這個任務的提示詞填進輸入框（可先改再送）"),
       onclick: () => {
         const ta = document.getElementById("chat-input");
         if (!ta) return;
@@ -5009,17 +5085,21 @@ function renderChatTasks() {
         ta.focus();
         ta.setSelectionRange(ta.value.length, ta.value.length);
       },
-    }, task.label);
+    }, task.label, to ? el("span", { class: "chip-to", text: to }) : null);
     btn.dataset.task = task.id;
     box.append(btn);
   }
-  // M13a：把「多欄套用」的入口寫在任務列，使用者不用先找到那顆小鈕
+  // M13a／M13b：把「多欄套用」的入口寫在任務列，使用者不用先找到那顆小鈕
   const tweakables = multiApplyFieldsFor(t);
   if (tweakables.length) {
     const lastAssistant = chatState.messages.map((m, i) => [m, i]).filter(([m]) => m.role === "assistant" && !(m.meta && m.meta.error)).pop();
+    const lastTask = lastAssistant && lastAssistant[0].meta && lastAssistant[0].meta.task
+      ? chatTaskById(t.kind, lastAssistant[0].meta.task) : null;
+    const goal = lastTask && lastTask.applyHint ? applyHintLabel(lastTask.applyHint) : "";
     box.append(el("button", {
       class: "chip chip-multi", type: "button",
-      title: "把最近一段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
+      title: goal ? `把這段回覆一鍵回填到「${goal}」（會先開面板讓你確認）`
+        : "把最近一段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
       onclick: () => {
         const idx = lastAssistant ? lastAssistant[1] : -1;
         if (idx < 0) { setSaveStatus("error", "還沒有模型回覆可以解析（先送一個任務）"); return; }
@@ -5030,7 +5110,7 @@ function renderChatTasks() {
         if (!host.childElementCount) renderMultiPanel(host, idx);
         host.scrollIntoView({ block: "nearest", behavior: "smooth" });
       },
-    }, "⇣ 解析成多欄適用欄位"));
+    }, goal ? `⇣ 回填到 ${goal}` : "⇣ 解析成多欄適用欄位"));
   }
   // 章回數量的快速選項（只有故事卡有）
   if (t.kind === "story" && state.project && (state.project.story.chapters || []).length) {
@@ -5064,44 +5144,146 @@ function renderChatLog() {
     );
     const acts = el("div", { class: "bubble-actions" });
     const multi = el("div", { class: "ma-host" });
-    acts.append(el("button", {
-      class: "btn btn-small", type: "button",
-      title: "把這段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
-      onclick: () => {
-        try {
-          // 選取文字要在 onclick 最前面取一次：按鈕按下的那一下瀏覽器會收掉選取範圍
-          const selNow = replySelectionFor(bubbleElByIndex(idx)) || cachedSelectionFor(idx);
-          renderMultiPanel(multi, idx, selNow);
-        } catch (e) {
-          multi.textContent = "";
-          multi.append(el("div", { class: "error", text: `多欄套用面板開不起來：${e.message}` }));
-        }
-        if (!multi.childElementCount) return;
-        const closed = !!multi.querySelector(".btn-collapse");
-        multi.append(el("div", { class: "ma-actions ma-foot" },
-          el("button", { class: "btn btn-small btn-collapse", type: "button", onclick: () => { multi.textContent = ""; } }, "收起")));
-        if (closed) multi.querySelector(".ma-foot").remove();
-      },
-    }, "⇣ 解析成多欄"));
-    acts.append(el("button", {
-      class: "btn btn-small", type: "button",
-      onclick: async (ev) => {
-        try {
-          await navigator.clipboard.writeText(m.content);
-          ev.target.textContent = "已複製";
-          setTimeout(() => { ev.target.textContent = "複製"; }, 1200);
-        } catch (_) {
-          const ta = document.getElementById("chat-input");
-          if (ta) { ta.value = m.content; ta.focus(); }
-          setSaveStatus("pending", "無法存取剪貼簿，已把內容放進輸入框");
-        }
-      },
-    }, "複製"));
-    acts.append(applyControls(idx, m));
+    // M13b：回覆是回哪個任務的 → 按鈕直接寫「⇣ 回填到 <目標>」
+    const replyTask = m.meta && m.meta.task ? chatTaskById(chatState.target.kind, m.meta.task) : null;
+    const goal = replyTask && replyTask.applyHint ? applyHintLabel(replyTask.applyHint) : "";
+    const isError = !!(m.meta && m.meta.error);
+    const adviceOnly = !!(replyTask && replyTask.applyHint === null);
+    const hintOk = !!(replyTask && replyTask.applyHint);
+    if (adviceOnly) {
+      acts.append(el("span", { class: "hint chip-advice", text: "僅建議，不回填（照建議自己改欄位）" }));
+    } else if (hintOk) {
+      acts.append(el("button", {
+        class: "btn btn-small btn-primary ma-open", type: "button",
+        title: `把這段回覆解析後一鍵寫回「${goal}」；面板只會展開這次任務的目標格子`,
+        onclick: () => openReplyBackfill(multi, idx),
+      }, `⇣ 回填到 ${goal}`));
+      if (replyTask.applyHint.variants) {
+        const pick = replyVariants(m.content, replyTask);
+        if (pick.length >= 2) acts.append(variantButtons(multi, idx, replyTask, pick));
+      }
+    } else if (!isError) {
+      acts.append(el("button", {
+        class: "btn btn-small", type: "button",
+        title: "把這段回覆解析成多個欄位（章回／台詞／風格／身世…），先預覽再套用",
+        onclick: () => openReplyBackfill(multi, idx),
+      }, "⇣ 解析成多欄"));
+    }
+    if (!isError) {
+      acts.append(el("button", {
+        class: "btn btn-small", type: "button",
+        onclick: async (ev) => {
+          try {
+            await navigator.clipboard.writeText(m.content);
+            ev.target.textContent = "已複製";
+            setTimeout(() => { ev.target.textContent = "複製"; }, 1200);
+          } catch (_) {
+            const ta = document.getElementById("chat-input");
+            if (ta) { ta.value = m.content; ta.focus(); }
+            setSaveStatus("pending", "無法存取剪貼簿，已把內容放進輸入框");
+          }
+        },
+      }, "複製"));
+      acts.append(applyControls(idx, m));
+    }
     wrap.append(meta, acts, multi);
     log.append(wrap);
   });
   log.scrollTop = log.scrollHeight;
+}
+
+// M13b：氣泡上的「⇣ 回填到 …」→ 開面板（只展開這次任務的目標格子）
+function openReplyBackfill(multi, idx) {
+  try {
+    // 選取文字要在 onclick 最前面取一次：按鈕按下的那一下瀏覽器會收掉選取範圍
+    const selNow = replySelectionFor(bubbleElByIndex(idx)) || cachedSelectionFor(idx);
+    renderMultiPanel(multi, idx, selNow);
+  } catch (e) {
+    multi.textContent = "";
+    multi.append(el("div", { class: "error", text: `回填面板開不起來：${e.message}` }));
+  }
+  if (!multi.childElementCount) return;
+  multi.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// ── M13b：多版本候選（三個版本台詞／三個音色建議）────────────────
+// 「1. …／2. …／3. …」或三行各自獨立的句子 → 回 [{no, text}]
+function replyVariants(text, task) {
+  const s = stripChatWrapper(text);
+  const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  const numbered = lines.filter((l) => /^\s*(?:[-*•]\s*)?(?:\d+[.)、]|[（(]\d+[）)]|[①②③④⑤⑥]|版本\s*\d)\s*/.test(l));
+  const pool = numbered.length >= 2 ? numbered : (task && task.id === "character_voice" ? voiceCandidates(lines) : lines);
+  for (const l of pool) {
+    let v = l.replace(/^\s*(?:[-*•]\s*)?(?:\d+[.)、]|[（(]\d+[）)]|[①②③④⑤⑥])\s*/, "").trim();
+    if (!v || v.length > 400) continue;
+    v = v.replace(/\*{2,}/g, "");
+    // 「台詞（更口語）」→ 風格名留著當標籤，但值只取台詞本體
+    out.push({ style: (v.match(/[（(]([^）)]{1,10})[）)]\s*$/) || [])[1] || "", text: v });
+  }
+  return out.slice(0, 3).length >= 2 ? out.slice(0, 3) : [];
+}
+
+function voiceCandidates(lines) {
+  // 「1. 低沉沙啞 · 敘事旁白型：演出方式…」或「音色一：…」或每行一個候選
+  const out = [];
+  for (const l of lines) {
+    if (/^(以下是|建議|可以|這三個|綜合)/.test(l)) continue;
+    out.push(l);
+  }
+  return out.slice(0, 3);
+}
+
+function variantValueFor(task, v) {
+  if (task.id === "character_voice") {
+    const style = v.style ? `${v.style}：` : "";
+    return `${style}${v.text}`.trim();
+  }
+  // 台詞：去掉結尾的風格括號與引號、角色名
+  let t = v.text.replace(/^[^：:]{1,8}\s*[：:]\s*/, "").replace(/[「」『』"]/g, "");
+  t = t.replace(/[（(]([^）)]{1,10})[）)]\s*$/, "").trim();
+  return t;
+}
+
+function variantButtons(multi, idx, task, pick) {
+  const box = el("div", { class: "ma-variants" },
+    el("span", { class: "hint", text: `多版本（${pick.length} 個）→ 直接寫進「${applyHintLabel(task.applyHint)}」：` }));
+  pick.forEach((v, i) => {
+    const b = el("button", {
+      class: "btn btn-small btn-variant", type: "button",
+      title: `把第 ${i + 1} 版直接寫進「${applyHintLabel(task.applyHint)}」（不蓋掉其他欄位）\n${v.text.slice(0, 120)}`,
+      onclick: () => applyVariant(b, idx, task, i + 1, variantValueFor(task, v)),
+    }, `用第 ${i + 1} 版`);
+    if (v.style) b.append(el("span", { class: "ma-variant-tag", text: v.style }));
+    box.append(b);
+  });
+  multi.before(box);
+  return box;
+}
+
+async function applyVariant(btn, idx, task, no, value) {
+  if (!state.slug || !value) return;
+  const path = (task.applyHint && task.applyHint.fields && task.applyHint.fields[0]) || "line";
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "寫入中…";
+  try {
+    const res = await api(`/api/projects/${state.slug}/chat/apply-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: chatState.target, items: [{ path, value, mode: "replace" }] }),
+    });
+    syncTargetFromServer(res.targetAfter);
+    const warns = (res.warnings || []).length ? `（提醒：${res.warnings.join("；")}）` : "";
+    setSaveStatus(warns ? "pending" : "saved", `已寫入第 ${no} 版到 ${res.label} 的 ${path} · ${clockText()}${warns}`);
+    btn.textContent = `已用第 ${no} 版 ✓`;
+    const box = btn.parentElement;
+    if (box) box.querySelectorAll(".btn-variant").forEach((b) => { if (b !== btn) b.disabled = true; });
+  } catch (e) {
+    btn.textContent = old;
+    btn.disabled = false;
+    setSaveStatus("error", `寫入失敗：${e.message}`);
+  }
 }
 
 // 「套用到…」：下拉列出這張卡的目標欄位 + replace/append + 套用鈕
@@ -5291,6 +5473,49 @@ function parseCharacterTraits(text) {
   for (const [label, val] of Object.entries(got)) {
     const key = CHAR_TRAIT_KEYS[label];
     if (key && val) out[key] = out[key] ? `${out[key]}\n${val}` : val;
+  }
+  return out;
+}
+
+// M13b：外型解析（character_look）。「臉型五官：…／髮型：…／體型：…／膚色：…／英文 prompt：…」
+// 也認英文標籤（Face/Hair/Body/Skin/English prompt）與「**髮型**：」粗體標籤。
+const APPEARANCE_LABELS = ["臉型五官", "臉型", "五官", "面部", "髮型髮色", "髮型", "髮色", "體型", "身材", "身型",
+  "膚色", "皮膚", "辨識特徵", "特徵", "英文 prompt", "英文prompt", "英文提示", "英文", "promptEn",
+  "Face", "Hair", "Body", "Skin", "English prompt", "English Prompt", "prompt"];
+const APPEARANCE_KEYS = {
+  臉型五官: "face", 臉型: "face", 五官: "face", 面部: "face", Face: "face",
+  髮型髮色: "hair", 髮型: "hair", 髮色: "hair", Hair: "hair",
+  體型: "body", 身材: "body", 身型: "body", Body: "body",
+  膚色: "skin", 皮膚: "skin", Skin: "skin",
+  "英文 prompt": "promptEn", 英文prompt: "promptEn", 英文提示: "promptEn", 英文: "promptEn",
+  promptEn: "promptEn", "English prompt": "promptEn", "English Prompt": "promptEn", prompt: "promptEn",
+};
+function parseAppearance(text) {
+  const got = parseLabeled(text, APPEARANCE_LABELS);
+  const out = {};
+  for (const [label, val] of Object.entries(got)) {
+    const key = APPEARANCE_KEYS[label];
+    const v = String(val || "").replace(/^[\s「『"]+|[\s」』"]+$/g, "").trim();
+    if (!key || !v) continue;
+    if (key === "promptEn") {
+      // 英文 prompt 可能是多行：保留整段（標籤行之後的英文段落也算）
+      out.promptEn = out.promptEn ? `${out.promptEn} ${v}` : v;
+      continue;
+    }
+    out[key] = out[key] ? `${out[key]}；${v}` : v;
+  }
+  // 模型只回「英文 prompt：」單獨一行、內容在下一行時，parseLabeled 會留空 → 補抓
+  if (!out.promptEn) {
+    const m = stripChatWrapper(text).match(/^[ \t]*(?:[-*•]\s*)?\*{0,2}(?:英文\s*prompt|promptEn|English prompt)\*{0,2}\s*[：:][ \t]*\n([\s\S]+)$/im);
+    if (m) {
+      const block = m[1].split(/\n\s*\n/)[0].trim();
+      if (block) out.promptEn = block.replace(/\n+/g, " ").trim();
+    }
+  }
+  // 完全沒有標籤但整段是英文 → 視為 promptEn（模型「第二段寫英文 promptEn」常常不加標籤）
+  if (!Object.keys(out).length) {
+    const s = stripChatWrapper(text);
+    if (s && !/[\u4e00-\u9fff]/.test(s)) out.promptEn = s.replace(/\n+/g, " ").trim();
   }
   return out;
 }
@@ -5569,38 +5794,148 @@ function buildSliderRow(spec, initialText, fromSelection) {
   return rowState;
 }
 
-function renderMultiPanel(host, idx, selArg) {
+// M13b：單欄格子的列（勾選框＋textarea）；spec = { path, label, hint, value }
+function buildPlainRow(spec, text) {
+  const c = el("input", { type: "checkbox" });
+  const ta = el("textarea", { class: "ma-input", rows: "2" });
+  ta.placeholder = `要寫進「${spec.label}」的內容（勾了才用；留空不套用）`;
+  ta.addEventListener("input", () => updateMultiPreview());
+  const line = el("div", { class: "ma-plain-row" },
+    el("label", { class: "ma-slider-head" }, c, el("span", { text: spec.label })),
+    ta);
+  if (spec.hint) line.append(el("div", { class: "hint ma-hint", text: spec.hint }));
+  c.addEventListener("change", () => {
+    line.classList.toggle("checked", c.checked);
+    if (c.checked && !ta.value.trim()) ta.value = text;
+    updateMultiPreview();
+  });
+  // 先放值再判斷（textarea.value 要在設完才讀得到）
+  ta.value = spec.value || "";
+  // 預填了內容的格子預設勾起來（由 applyHint 指定的回填目標）
+  if (String(ta.value || "").trim()) { c.checked = true; line.classList.add("checked"); }
+  return { path: spec.path, check: c, ta, row: line };
+}
+
+function renderMultiPanel(host, idx, selArg, taskIdArg) {
   host.textContent = "";
   const t = chatState.target;
   const specs = multiApplyFieldsFor(t);
-  if (!specs.length) return;
   const bubble = bubbleElByIndex(idx);
   const selNow = (selArg !== undefined ? selArg : replySelectionFor(bubble)) || "";
   const picked = selNow ? { text: selNow, fromSelection: true }
     : { text: (chatState.messages[idx] && chatState.messages[idx].content) || "", fromSelection: false };
   const text = picked.text;
+  // M13b：這個氣泡是回哪個任務的？→ 決定「該開哪幾格」
+  const taskId = taskIdArg !== undefined ? taskIdArg : ((chatState.messages[idx] && chatState.messages[idx].meta && chatState.messages[idx].meta.task) || null);
+  const task = taskId ? chatTaskById(t.kind, taskId) : null;
+  const hasTaskHint = !!(task && task.applyHint);
+  const hint = hasTaskHint ? task.applyHint : null;
+  const hintParts = hint ? splitHintFields(t, hint) : { multi: [], plain: [] };
+  const hasHint = !!hint;
+  const hintPaths = new Set((hint && hint.fields) || []);
+  const hintSpecs = hintParts.multi;
+  const hintPlain = hintParts.plain;
   multiState.msg = idx;
   multiState.rows = [];
+  multiState.task = taskId;
+  multiState.hint = hint;
   // 選取範圍很可能是使用者要精準套用的那一段；之後解析都優先用它（不要因焦點移動而丟失）
   multiState.selectedText = picked.fromSelection ? picked.text : "";
   multiState.note = "";
+  multiState.summary = "";
   multiState.plainRows = [];
+  // 有 applyHint 的任務：先把回覆解析成它宣告的那幾格，再拿來預填
+  const hintParsed = {};
+  const notes0 = [];
+  function parseHintFields(src) {
+    for (const k of Object.keys(hintParsed)) delete hintParsed[k];
+    notes0.length = 0;
+    if (!hasHint) return;
+    const kinds = [...new Set(hintSpecs.map((s) => s.kind))];
+    for (const kind of kinds) {
+      const res = tidyParseResult(kind, parseReplyIntoFields(src, kind,
+        { characters: (state.project && state.project.characters) || [] }));
+      for (const [k, v] of Object.entries(res.patches || {})) hintParsed[k] = v;
+      if (res.note) notes0.push(`${kind}：${res.note}`);
+    }
+    const look = (task && task.id === "character_look") || hintPaths.has("appearance.face");
+    if (look) {
+      const ap = parseAppearance(src);
+      if (Object.keys(ap).length) {
+        // 攤平成「appearance.face」這種路徑 key：回填格子一律用路徑取值
+        for (const [k, v] of Object.entries(ap)) hintParsed[`appearance.${k}`] = v;
+        hintParsed.appearance = { ...(hintParsed.appearance || {}), ...ap };
+      } else notes0.push("外型：沒有辨識到「臉型五官：」「髮型：」這種標籤行");
+    }
+    const onlyPromptEn = hintPaths.size === 1 && hintPaths.has("appearance.promptEn");
+    const singlePlain = hintPlain.length === 1 ? hintPlain[0] : null;
+    if (singlePlain && singlePlain !== "appearance.promptEn" && !hintSpecs.length) {
+      // 純文字回填（台詞／大綱／描述／音色）：整段回覆就是值
+      hintParsed[singlePlain] = simplifyReplyText(singlePlain, src);
+    } else if (singlePlain === "appearance.promptEn" && !hintSpecs.length) {
+      const ap = parseAppearance(src);
+      hintParsed["appearance.promptEn"] = ap.promptEn || firstEnglishBlock(src) || src.trim();
+    } else if (onlyPromptEn && hintSpecs.length) {
+      const ap = parseAppearance(src);
+      hintParsed["appearance.promptEn"] = ap.promptEn || firstEnglishBlock(src) || src.trim();
+    }
+  }
+  parseHintFields(text);
   const panel = el("div", { class: "ma-panel" });
   panel.append(el("div", { class: "ma-head" },
-    el("strong", { text: "多欄套用" }),
+    el("strong", { text: hasHint ? `回填到 ${applyHintLabel(hint)}` : "多欄套用" }),
     el("span", { class: "hint ma-text", text: picked.fromSelection ? "（用你在回覆裡選取的文字）" : "（用整段回覆；先在回覆裡選一段就只套用那段）" })));
 
   const bodyWrap = el("div", { class: "ma-body" });
-  bodyWrap.append(el("div", { class: "hint", text: "勾要套用的格子（整份結構一起寫）：" }));
-  for (const spec of specs) {
-    const rowState = buildSliderRow(spec, text, picked.fromSelection);
-    multiState.rows.push(rowState);
-    bodyWrap.append(rowState.row);
+  if (hasHint) {
+    bodyWrap.append(el("div", { class: "hint", text: `任務「${task.label}」的回填目標（已預填並勾選，確認無誤就按下面的套用）：` }));
+    for (const spec of hintSpecs) {
+      const rowState = buildSliderRow(spec, text, picked.fromSelection);
+      if (hintParsed[spec.kind] !== undefined) rowState.value = { [spec.kind]: hintParsed[spec.kind] };
+      rowState.check.checked = true;
+      rowState.row.classList.add("checked");
+      if (rowState.value) renderSliderPreview(rowState, { patches: rowState.value, warnings: notes0.filter((n) => n.startsWith(spec.kind)) });
+      multiState.rows.push(rowState);
+      bodyWrap.append(rowState.row);
+    }
+    const plainLabels = applyFieldsFor(t);
+    for (const path of hintPlain) {
+      const label = hintFieldLabel(plainLabels, path);
+      const pr = buildPlainRow({ path, label, value: hintParsed[path] || "", hint: plainHintFor(path) }, text);
+      multiState.plainRows.push(pr);
+      bodyWrap.append(pr.row);
+    }
+    if (!hintSpecs.length && !hintPlain.length) {
+      bodyWrap.append(el("div", { class: "hint", text: "這個任務沒有可回填的格子。" }));
+    }
+    if (notes0.length) bodyWrap.append(el("div", { class: "hint ma-hint", text: notes0.join("；") }));
+  } else {
+    bodyWrap.append(el("div", { class: "hint", text: "勾要套用的格子（整份結構一起寫）：" }));
+    for (const spec of specs) {
+      const rowState = buildSliderRow(spec, text, picked.fromSelection);
+      if (hintParsed[spec.kind] !== undefined) rowState.value = { [spec.kind]: hintParsed[spec.kind] };
+      multiState.rows.push(rowState);
+      bodyWrap.append(rowState.row);
+    }
   }
-  // 純文字欄位（每格一個欄位；要一次套多個就勾多個）
+  panel.append(bodyWrap);
+
+  // 其他欄位收在 details 裡；有 applyHint 時不要讓使用者以為「什麼都能填」
+  const allPlain = applyFieldsFor(t);
+  const others = allPlain.filter(([path]) => !hasHint || !hintPaths.has(path));
+  const otherMulti = specs.filter((s) => !hasHint || !hintPaths.has(s.path));
   const plainHost = el("details", { class: "ma-plain" },
-    el("summary", { class: "hint", text: "其他單一欄位（要一次套多個就勾多個）" }));
-  for (const [path, label] of applyFieldsFor(t)) {
+    el("summary", { class: "hint", text: `其他欄位（${others.length + otherMulti.length} 個；這次任務不一定要填）` }));
+  if (hasHint) {
+    for (const spec of otherMulti) {
+      const rowState = buildSliderRow({ ...spec, parse: true }, text, picked.fromSelection);
+      rowState.check.checked = false;
+      rowState.row.classList.remove("checked");
+      multiState.rows.push(rowState);
+      plainHost.append(rowState.row);
+    }
+  }
+  for (const [path, label] of others) {
     const c = el("input", { type: "checkbox" });
     const ta = el("textarea", { class: "ma-input", rows: "2" });
     ta.placeholder = `要寫進「${label}」的內容（勾了才用；留空不套用）`;
@@ -5612,39 +5947,104 @@ function renderMultiPanel(host, idx, selArg) {
       if (c.checked && !ta.value.trim()) ta.value = text;
       updateMultiPreview();
     });
-    multiState.plainRows.push({ path, check: c, ta });
+    multiState.plainRows.push({ path, check: c, ta, other: true });
     plainHost.append(line);
   }
-  panel.append(bodyWrap, plainHost);
+  panel.append(plainHost);
 
   const actions = el("div", { class: "ma-actions" });
-  const parseBtn = el("button", { class: "btn btn-small btn-primary", type: "button",
-    title: "把回覆自動分配到結構格子（不會直接寫檔，先看下方預覽）" }, "⇣ 解析成多欄");
   const applyBtn = el("button", { class: "btn btn-small btn-primary", type: "button" }, "套用已勾的欄位");
   const cancelBtn = el("button", { class: "btn btn-small", type: "button" }, "收起");
-  parseBtn.addEventListener("click", () => {
-    // 解析目標＝還沒解析過的格子；已解析過、使用者也沒取消勾選的保留結果
-    // 以使用者的勾選為準（預設全勾）；不要的格子先取消勾選再按解析
-    let targets = multiState.rows.filter((r) => r.spec.parse && r.check.checked);
-    if (!targets.length) { multiState.note = "這個對象沒有可解析的結構欄位"; updateMultiPreview(); return; }
-    const notes = [];
-    const srcText = multiState.selectedText || text;
-    for (const r of targets) {
-      const res = runParseForRow(r, srcText);
-      if (res.note) notes.push(`${r.spec.label.split("（")[0]}：${res.note}`);
-    }
-    multiState.note = notes.join("；");
-    multiState.previewOpen = true;
-    updateMultiPreview();
-  });
+  if (!hasHint) {
+    const parseBtn = el("button", { class: "btn btn-small btn-primary", type: "button",
+      title: "把回覆自動分配到結構格子（不會直接寫檔，先看下方預覽）" }, "⇣ 解析成多欄");
+    parseBtn.addEventListener("click", () => {
+      // 解析目標＝還沒解析過的格子；已解析過、使用者也沒取消勾選的保留結果
+      // 以使用者的勾選為準（預設全勾）；不要的格子先取消勾選再按解析
+      let targets = multiState.rows.filter((r) => r.spec.parse && r.check.checked);
+      if (!targets.length) { multiState.note = "這個對象沒有可解析的結構欄位"; updateMultiPreview(); return; }
+      const notes = [];
+      const srcText = multiState.selectedText || text;
+      for (const r of targets) {
+        const res = runParseForRow(r, srcText);
+        if (res.note) notes.push(`${r.spec.label.split("（")[0]}：${res.note}`);
+      }
+      multiState.note = notes.join("；");
+      multiState.previewOpen = true;
+      updateMultiPreview();
+    });
+    actions.append(parseBtn);
+  } else {
+    const reparse = el("button", { class: "btn btn-small", type: "button",
+      title: "用目前全文重新解析，覆蓋格子裡已預填的內容" }, "↻ 重新解析");
+    reparse.addEventListener("click", () => {
+      const src = multiState.selectedText || (chatState.messages[idx] && chatState.messages[idx].content) || "";
+      parseHintFields(src);
+      const notes = [];
+      for (const r of multiState.rows) {
+        if (!hintPaths.has(r.spec.path)) continue;
+        if (hintParsed[r.spec.kind] !== undefined) {
+          r.value = { [r.spec.kind]: hintParsed[r.spec.kind] };
+          r.check.checked = true;
+          r.row.classList.add("checked");
+          renderSliderPreview(r, { patches: r.value, warnings: [] });
+          if (r.spec.kind) notes.push(`${r.spec.kind}：${(hintParsed[r.spec.kind] || []).length || Object.keys(hintParsed[r.spec.kind] || {}).length} 項`);
+        }
+      }
+      for (const p of multiState.plainRows) {
+        if (!hintPaths.has(p.path)) continue;
+        if (p.ta) p.ta.value = hintParsed[p.path] || "";
+        if (p.check) { p.check.checked = !!String(p.ta.value || "").trim(); p.check.dispatchEvent(new Event("change")); }
+      }
+      multiState.note = notes.join("；");
+      updateMultiPreview();
+    });
+    actions.append(reparse);
+  }
   applyBtn.addEventListener("click", () => applyMulti(applyBtn));
   cancelBtn.addEventListener("click", () => { host.textContent = ""; multiState.rows = []; });
-  actions.append(parseBtn, applyBtn, cancelBtn);
+  actions.append(applyBtn, cancelBtn);
   panel.append(actions, el("div", { class: "ma-note" }));
   multiState.noteHost = panel.querySelector(".ma-note");
   multiState.host = host;
   host.append(panel);
   updateMultiPreview();
+}
+
+// 單欄回填的短提示
+function plainHintFor(path) {
+  if (path === "line") return "只改這一句台詞；系統會自動去掉引號與「1.」這種編號。";
+  if (path === "synopsis") return "整段回覆寫進故事大綱（會蓋掉原本的大綱）。";
+  if (path === "voice.desc") return "音色描述寫進人物卡的 voice.desc（三選一版本按鈕會直接寫入）。";
+  if (path === "appearance.promptEn") return "只認英文段；中文描述請放上方的外型四欄。";
+  if (path === "promptEn") return "整段回覆寫進 promptEn（可以直接編修）。";
+  if (path === "desc") return "整段回覆寫進場景描述；想只套用一段，先在回覆裡選取。";
+  return "";
+}
+
+// 單欄值收尾：台詞／音色去掉編號、引號、串場語
+function simplifyReplyText(path, text) {
+  let s = stripChatWrapper(text).trim();
+  if (path === "line") {
+    s = s.split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+    s = s.replace(/^\s*(?:\d+[.)、]|[-*•])\s*/, "");
+    const m = s.match(/^[^：:]{1,8}\s*[：:]\s*(.+)$/);
+    if (m) s = m[1];
+    s = s.replace(/[「」『』"]/g, "").replace(/[（(][^）)]*[）)]\s*$/, "").trim();
+    return s;
+  }
+  if (path === "voice.desc") {
+    const lines = s.split("\n").filter((l) => l.trim() && !/^(以下是|建議|可以)/.test(l.trim()));
+    if (lines.length >= 3) s = lines.slice(0, 3).join("\n");
+  }
+  return s;
+}
+
+// 回覆裡第一段「英文」行（給只有 promptEn 的任務用）
+function firstEnglishBlock(text) {
+  const s = stripChatWrapper(text);
+  if (/[\u4e00-\u9fff]/.test(s)) return "";
+  return s.trim();
 }
 
 // 對單一結構格子跑解析：來源＝使用者打過的 textarea，否則用「選取段落／整段回覆」
@@ -5800,9 +6200,10 @@ function collectMultiItems() {
     items.push(...itemsFromRow(r, notes));
   }
   for (const p of multiState.plainRows || []) {
+    if (p.other) continue;   // 「其他欄位」= 只有使用者自己勾、自己打完才套用
     if (!p.check.checked) continue;
     const v = (p.ta.value || "").trim();
-    if (!v) { notes.push(`${p.path}：內容是空的，略過`); continue; }
+    if (!v) { continue; }    // 空的就略過，不洗版
     items.push({ path: p.path, value: v, mode: "replace" });
   }
   return { items, notes };
@@ -5888,7 +6289,7 @@ async function sendChat() {
     chatState.messages.push({
       role: "assistant",
       content: res.reply,
-      meta: { model: res.model, tokens: (res.usage || {}).total_tokens },
+      meta: { model: res.model, tokens: (res.usage || {}).total_tokens, task: task || null },
     });
     if (!chatState.llm || !chatState.llm.ok) { chatState.llm = { ok: true, baseUrl: "", model: res.model, models: [] }; checkLLM(true); }
   } catch (e) {

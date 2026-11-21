@@ -316,6 +316,15 @@ body.has-batch .toolbar { position: static; }
 .chip-multi { border-color: var(--accent-2); color: #cfe4ff; }
 .chip-multi:hover { border-color: var(--accent); }
 
+/* M13b：任務 chip 直接標出回填目標 */
+.chip-hasapply { border-color: rgba(90, 160, 255, .45); }
+.chip-to { margin-left: 6px; font-size: 11px; color: var(--fg-dim); }
+.chip.active .chip-to { color: #dfe9ff; }
+.chip-advice { border-style: dashed; border-color: var(--warn); color: var(--warn); }
+/* M13b：多版本候選按鈕 */
+.ma-variants { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; padding: 6px 8px; border: 1px dashed var(--accent-2); border-radius: 6px; background: var(--bg-3); }
+.btn-variant { border-color: var(--accent-2); }
+.ma-variant-tag { margin-left: 5px; font-size: 11px; color: var(--fg-dim); }
 .chat-input { border-top: 1px solid var(--line); padding: 10px 14px 12px; }
 .chat-input textarea { min-height: 84px; }
 .chat-actions { margin-top: 8px; }
