@@ -2230,11 +2230,20 @@ function shotCard(sh, idx) {
   };
   genBtn.addEventListener("click", () => onGen("ref"));
   t2iBtn.addEventListener("click", () => onGen("t2i"));
+  // M12b：生圖引擎的官方提示詞規則（MOSS caption／Qwen 官方槽位）＋本次要送出的提示詞預覽
+  const ruleNow = () => (curEngine() === "moss" ? "moss_t2i" : "qwen_image");
+  const ruleBadge = el("span", { class: "badge rule-badge", text: `規則：${promptRuleLabel(ruleNow())}` });
+  const pp = promptPreviewPanel(ruleNow(), sh.id);
+  const ppBtn = promptPreviewButton(ruleNow(), sh.id, pp);
+  const syncRuleBadge = () => { ruleBadge.textContent = `規則：${promptRuleLabel(ruleNow())}`; };
   imgCard.append(el("div", { class: "subcard-head" },
     el("h4", { text: "首尾幀（images）" }),
     el("span", { class: "spacer" }),
-    genStatus, genBtn, t2iBtn,
+    ruleBadge, ppBtn, genStatus, genBtn, t2iBtn,
   ));
+  imgCard.append(pp.box);
+  imgCard.append(el("p", { class: "hint",
+    text: "生圖前會先過該引擎的官方提示詞規則（app/promptrules.py）；不合格會擋下並列出缺什麼，不會默默送出。" }));
   const genLogBox = el("div", { class: "gen-log hidden" });
   imgCard.append(genLogBox);
   // 重繪後把生圖狀態（忙碌／錯誤／上一次結果）接回來
@@ -2386,8 +2395,11 @@ function videoGenCard(sh) {
     if (!j) {
       status.className = "vg-status hint";
       const vLora = sh.video && sh.video.lora;
+      const lastSrc = videoJobs[sh.id] && videoJobs[sh.id].lastPromptSource;
+      const srcTxt = lastSrc === "compiled" ? " · 上次提示詞：模板編譯"
+        : lastSrc === "promptEn" ? " · 上次提示詞：promptEn" : "";
       status.textContent = sh.video && sh.video.status === "done"
-        ? `✓ 已有影片（${sh.video.taskType || "r2v"}${vLora !== undefined ? " · " + (vLora ? "LoRA " + videoLoraLabel(vLora) : "無 LoRA") : ""}）` : "";
+        ? `✓ 已有影片（${sh.video.taskType || "r2v"}${vLora !== undefined ? " · " + (vLora ? "LoRA " + videoLoraLabel(vLora) : "無 LoRA") : ""}${srcTxt}）` : "";
       bar.classList.add("hidden");
     } else if (busy) {
       status.className = "vg-status hint gen-busy-text";
@@ -2414,7 +2426,11 @@ function videoGenCard(sh) {
       status.className = "vg-status hint ok-text";
       const usedLora = (j.loras || [])[0];
       const loraTxt = usedLora ? ` · LoRA ${videoLoraLabel(usedLora.name)}@${usedLora.strength}` : " · 無 LoRA";
-      status.textContent = `✓ 完成：${Math.round(j.elapsed || 0)} 秒 · pid ${j.pid || "—"} · ${j.width}×${j.height} · ${j.frames} 幀 · steps ${j.steps ?? "—"}${loraTxt}`;
+      // M12b：這次實際送出的提示詞來源（promptEn 原稿 or 模板編譯）
+      const psTxt = j.promptSource === "compiled" ? " · 提示詞：模板編譯（promptEn 未過規則）"
+        : j.promptSource === "promptEn" ? " · 提示詞：promptEn ✓" : "";
+      if (j.promptSource) videoJobs[sh.id] = Object.assign({}, videoJobs[sh.id], { lastPromptSource: j.promptSource });
+      status.textContent = `✓ 完成：${Math.round(j.elapsed || 0)} 秒 · pid ${j.pid || "—"} · ${j.width}×${j.height} · ${j.frames} 幀 · steps ${j.steps ?? "—"}${loraTxt}${psTxt}`;
       const gdone = gpuBarText(j.gpu);
       if (gdone) status.append(el("span", { class: "gpu-inline", text: `　${gdone}` }));
       bar.classList.add("hidden");
@@ -2480,6 +2496,17 @@ function videoGenCard(sh) {
 
   genBtn.addEventListener("click", async () => {
     if (state.dirty) { try { await saveNow(); } catch (_) { /* 存檔失敗仍可試 */ } }
+    // M12b：promptEn 不符 H3 官方規則時，事前講清楚「按下去會自動改用模板編譯」
+    let willCompile = false;
+    try {
+      const pv = await api(`/api/projects/${state.slug}/shots/${sh.id}/prompt-preview?engine=h3_video`);
+      willCompile = pv.promptSource === "compiled";
+      if (willCompile) {
+        const why = (pv.problems || []).map((t) => `· ${t}`).join("\n");
+        if (!confirm(`這一鏡的 promptEn 未符合 H3 官方規則（六段式＋<Picture N>）：\n${why}\n\n`
+          + "按下去會自動改用「模板編譯」的提示詞送出（不會改動你的 project.json）。\n要繼續生影片嗎？")) return;
+      }
+    } catch (_) { /* 預覽失敗不擋送件：送件口本身仍會硬驗 */ }
     pullLora();
     const p = { width: params.width, height: params.height, frames: params.frames,
                 steps: params.steps, cfg: params.cfg, shiftVideo: params.shiftVideo, shiftAudio: params.shiftAudio,
@@ -2502,18 +2529,136 @@ function videoGenCard(sh) {
     }
   });
 
+  const pp = promptPreviewPanel("h3_video", sh.id);
+  const ppBtn = promptPreviewButton("h3_video", sh.id, pp);
   box.append(el("div", { class: "subcard-head" },
     el("h4", { text: "🎬 生影片（H3 導演台 r2v）" }),
+    el("span", { class: "badge rule-badge", text: `規則：${promptRuleLabel("h3_video")}` }),
+    ppBtn,
     el("span", { class: "spacer" }), status, advBtn, genBtn));
-  box.append(adv, bar, errBox, body, playBox);
+  // M12b：promptEn 不符規則的事前提醒（純讀預覽，不碰 GPU）
+  const preWarn = el("p", { class: "hint warn-text pp-pre-warn hidden" });
+  box.append(preWarn, pp.box, adv, bar, errBox, body, playBox);
+  (async () => {
+    try {
+      const pv = await api(`/api/projects/${state.slug}/shots/${sh.id}/prompt-preview?engine=h3_video`);
+      if (pv.promptSource === "compiled" && pv.prompt) {
+        preWarn.classList.remove("hidden");
+        preWarn.textContent = `⚠ promptEn 未符合 H3 官方規則（${(pv.problems || []).length} 項）→ `
+          + "按「生影片」會自動改用模板編譯的提示詞送出（不會改動 project.json）。";
+      }
+    } catch (_) { /* 拿不到就安靜 */ }
+  })();
 
-  // 換頁／重繪後接回：這個鏡頭有在跑的任務就繼續 poll，否則顯示最近一次任務
+// 換頁／重繪後接回：這個鏡頭有在跑的任務就繼續 poll，否則顯示最近一次任務
   if (videoJobs[sh.id] && videoJobs[sh.id].jobId && !videoJobs[sh.id].timer &&
       videoJobs[sh.id].job && ["queued", "running"].includes(videoJobs[sh.id].job.status)) {
     attach(videoJobs[sh.id].jobId);
   }
   paint();
   return box;
+}
+
+// ── M12b：提示詞規則（規則的唯一真相在 app/promptrules.py，前端只顯示與呼叫預覽）──
+// 三個引擎的顯示名；label／rulesZh／source 一律向後端拿（GET /api/prompt-rules），前端不複製規則文字。
+const PROMPT_RULES = {};       // ruleId → {id, label, source, rulesZh[]}
+
+async function loadPromptRules() {
+  try {
+    const res = await api("/api/prompt-rules");
+    (res.rules || []).forEach((r) => { PROMPT_RULES[r.id] = r; });
+  } catch (_) { /* 拿不到規則卡不影響生圖生影，只是少了條列說明 */ }
+}
+
+function promptRuleLabel(ruleId) {
+  const r = PROMPT_RULES[ruleId];
+  return r ? r.label : (ruleId || "—");
+}
+
+// 先把畫面上的編輯存下去，預覽才是「現在這份」的提示詞
+async function saveBeforePreview() {
+  if (state.dirty) { try { await saveNow(); } catch (_) { /* 存檔失敗仍可預覽舊資料 */ } }
+}
+
+// 「看這次要送出的提示詞」→ 打 prompt-preview，在頁內 panel 顯示規則條列＋提示詞全文＋warnings／problems
+function promptPreviewPanel(engine, shotId) {
+  const box = el("div", { class: "pp-box hidden" });
+  const head = el("div", { class: "row wrap pp-head" },
+    el("span", { class: "badge rule-badge", text: `規則：${promptRuleLabel(engine)}` }));
+  const body = el("div", {});
+  const state_txt = el("span", { class: "hint" });
+  head.append(el("span", { class: "spacer" }), state_txt);
+  box.append(head, body);
+
+  const render = (res) => {
+    body.textContent = "";
+    if (res.error) {
+      body.append(el("p", { class: "hint err-text", text: res.error }));
+    }
+    const rules = res.rulesZh || (PROMPT_RULES[res.ruleId] || {}).rulesZh || [];
+    const src = res.source || (PROMPT_RULES[res.ruleId] || {}).source || "";
+    body.append(el("div", { class: "pp-sec" },
+      el("div", { class: "pp-sec-title", text: `官方規則（${res.label || engine}）` }),
+      src ? el("p", { class: "hint mono", text: `來源：${src}` }) : null,
+      el("ol", { class: "pp-rules" }, ...rules.map((t) => el("li", { text: t })))));
+    if (res.problems && res.problems.length) {
+      body.append(el("div", { class: "pp-sec" },
+        el("div", { class: "pp-sec-title err-text", text: `未過規則（${res.problems.length}）` }),
+        el("ul", { class: "warn-list" }, ...res.problems.map((t) => el("li", { text: t })))));
+    }
+    if (res.warnings && res.warnings.length) {
+      body.append(el("div", { class: "pp-sec" },
+        el("div", { class: "pp-sec-title", text: `警告（${res.warnings.length}）` }),
+        el("ul", { class: "warn-list" }, ...res.warnings.map((t) => el("li", { text: t })))));
+    }
+    const prompt = res.prompt || "";
+    const pre = el("pre", { class: "pp-prompt" + (prompt.length > 900 ? " collapsed" : ""), text: prompt });
+    const toggle = el("button", { class: "btn btn-small", type: "button" },
+      prompt.length > 900 ? "展開全文" : "收合");
+    toggle.classList.toggle("hidden", prompt.length <= 900);
+    toggle.addEventListener("click", () => {
+      const c = pre.classList.toggle("collapsed");
+      toggle.textContent = c ? "展開全文" : "收合";
+    });
+    const copy = el("button", { class: "btn btn-small", type: "button" }, "複製提示詞");
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(prompt); copy.textContent = "已複製"; }
+      catch (_) { copy.textContent = "複製失敗（可手動選取）"; }
+      setTimeout(() => { copy.textContent = "複製提示詞"; }, 1500);
+    });
+    body.append(el("div", { class: "pp-sec" },
+      el("div", { class: "row wrap" },
+        el("div", { class: "pp-sec-title", text: `這次要送出的提示詞（${res.chars ?? prompt.length} 字元）` }),
+        el("span", { class: "spacer" }), toggle, copy),
+      pre));
+  };
+
+  const load = async (force) => {
+    if (!force && box.dataset.loaded === "1") { box.classList.toggle("hidden"); return; }
+    await saveBeforePreview();
+    box.classList.remove("hidden");
+    state_txt.textContent = "載入中…";
+    try {
+      const res = await api(`/api/projects/${state.slug}/shots/${shotId}/prompt-preview?engine=${encodeURIComponent(engine)}`);
+      box.dataset.loaded = "1";
+      state_txt.textContent = res.promptSource === "compiled" ? "來源：模板編譯（promptEn 未過規則）"
+        : res.ok ? "✓ 符合規則" : "⚠ 提示詞有問題（見下方）";
+      render(res);
+    } catch (e) {
+      box.dataset.loaded = "";
+      state_txt.textContent = "";
+      body.textContent = "";
+      body.append(el("p", { class: "hint err-text", text: `預覽失敗：${e.message}` }));
+    }
+  };
+  return { box, load };
+}
+
+function promptPreviewButton(engine, shotId, pp) {
+  const btn = el("button", { class: "btn btn-small", type: "button", title: "看這次真的要送進模型的提示詞與規則驗證" },
+    "看這次要送出的提示詞");
+  btn.addEventListener("click", () => pp.load(false));
+  return btn;
 }
 
 // ── M3d：鏡頭卡的工具列 ────────────────────────────────────────
@@ -5187,6 +5332,7 @@ function init() {
   $("#modal-new").addEventListener("click", (e) => { if (e.target.id === "modal-new") closeNewModal(); });
   window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
   renderAll();          // 先畫出「尚未選擇專案」與各分頁佔位，避免右側一片空白
+  loadPromptRules();    // M12b：三個引擎的官方提示詞規則卡（後端 app/promptrules.py 是唯一真相）
   loadProjectList();
   setSaveStatus("idle", "尚未載入");
   bindLightbox();

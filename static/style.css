@@ -519,3 +519,20 @@ body.has-batch .toolbar { position: static; }
 .dialog-ref-quote { margin: 2px 0; font-size: 13px; }
 .beat-refs { color: var(--accent); }
 .beat-refs.none { color: var(--err); }
+
+/* ══ M12b：提示詞規則與「這次要送出的提示詞」預覽（插在鏡頭卡既有 subcard 內）══ */
+.rule-badge { color: var(--accent); border-color: var(--accent); white-space: nowrap; }
+.pp-box { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+          background: var(--bg-3); }
+.pp-box.hidden { display: none; }
+.pp-head { align-items: center; gap: 8px; margin-bottom: 6px; }
+.pp-sec { margin: 8px 0; }
+.pp-sec:first-child { margin-top: 0; }
+.pp-sec-title { font-weight: 600; font-size: 12px; color: var(--fg-dim); margin-bottom: 4px; }
+.pp-rules { margin: 4px 0 0 18px; padding: 0; font-size: 12px; line-height: 1.6; }
+.pp-rules li { margin: 2px 0; }
+.pp-prompt { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5;
+             background: var(--bg-2, #111); border: 1px solid var(--line); border-radius: 4px;
+             padding: 8px; margin: 6px 0 0; max-height: 420px; overflow: auto; }
+.pp-prompt.collapsed { max-height: 180px; overflow: hidden; }
+.pp-pre-warn { margin: 4px 0 0; }
