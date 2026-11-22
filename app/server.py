@@ -845,8 +845,13 @@ def api_generate_characters(slug: str, body: Optional[CharacterSheetBody] = None
             "ok": False, "slug": slug, "error": f"角色立繪時發生未預期錯誤：{type(e).__name__}: {e}"})
     saved_ok = True
     try:
-        storage.save_project(slug, data)
-    except StorageError as e:
+        # 只把這次新產生的圖併回磁碟上的最新版；整份寫入會蓋掉生成期間使用者的刪除／編輯
+        new_paths = {it["path"] for it in (result.get("items") or []) if it.get("path")}
+        imagegen.merge_character_refs(
+            slug, data,
+            [it["characterId"] for it in (result.get("items") or []) if it.get("path")],
+            only_paths=new_paths)
+    except Exception as e:  # noqa: BLE001 —— StorageError 或結構問題都算寫回失敗
         saved_ok = False
         result["ok"] = False
         result["error"] = f"圖已生成，但寫回 project.json 失敗：{e}（圖仍在 media/characters/）"

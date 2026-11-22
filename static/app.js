@@ -417,8 +417,13 @@ function linesField(labelText, obj, key, placeholder) {
 function selectField(labelText, obj, key, options, allowEmpty = true) {
   const sel = el("select", {});
   if (allowEmpty) sel.append(el("option", { value: "", text: "（未設定）" }));
-  for (const o of options) sel.append(el("option", { value: o, text: o }));
-  sel.value = obj[key] ?? "";
+  // 舊資料／外部模型可能給非枚舉值（例如性別寫成「男性，喉結明顯」）→ 保留它顯示，
+  // 不要讓 select 因為對不到選項而自己跳回空白（使用者會以為資料沒寫進去）。
+  const cur = obj[key] == null ? "" : String(obj[key]);
+  const opts = [...options];
+  if (cur && !opts.includes(cur)) opts.push(cur);
+  for (const o of opts) sel.append(el("option", { value: o, text: o }));
+  sel.value = cur;
   sel.addEventListener("change", () => { obj[key] = sel.value; markDirty(); });
   return el("label", { class: "field" }, el("span", { text: labelText }), sel);
 }
@@ -595,6 +600,10 @@ function refImageGrid(list, opts = {}) {
             list.splice(idx, 1);
             if (opts.onChanged) opts.onChanged();
             markDirty();
+            // 立刻落地：生圖任務可能幾分鐘後才寫回，不能讓它用「開始生成時」的舊快照
+            // 把這次刪除蓋回來（實測：刪掉的圖會在生成完成後復活）。
+            clearTimeout(state.saveTimer);
+            saveNow();
             renderViews();
           },
         }, "✕"),
@@ -765,16 +774,8 @@ function charCard(ch) {
   });
   wrap.append(outfitCard);
 
-  // 背景
-  const bg = ensure_obj(ch, "background", {});
-  const bgCard = el("div", { class: "subcard" });
-  bgCard.append(el("h4", { text: "背景（background）" }));
-  bgCard.append(field("出身（birth）", bg, "birth", "從哪來、什麼成長環境", false));
-  bgCard.append(liveText("個性（personality）", bg, "personality", "個性特質", { rows: "2" }));
-  bgCard.append(liveText("目標（goal）", bg, "goal", "這個角色想要什麼", { rows: "2" }));
-  bgCard.append(liveText("秘密（secret）", bg, "secret", "不為人知的事", { rows: "2" }));
-  bgCard.append(liveText("關係（relations）", bg, "relations", "與其他角色的關係", { rows: "2" }));
-  wrap.append(bgCard);
+  // 背景（background）已移除：它不參與任何生成，只會讓使用者多填五個沒用的欄位。
+  // 舊專案裡殘留的 background 資料不主動清除，讀進來也不再用它組提示詞。
 
   // M3d：身份錨點（identityAnchors）＋ 分階段造型（stages）
   wrap.append(anchorsCard(ch));
@@ -1016,7 +1017,6 @@ function charListCard() {
           id, name: "", aliases: [], role: "配角",
           appearance: { age: "", gender: "", skin: "", face: "", hair: "", body: "", features: [], promptEn: "" },
           outfits: [],
-          background: { birth: "", personality: "", goal: "", secret: "", relations: "" },
           voice: { desc: "", refAudio: "", engine: "fish_s2", note: "" },
           refImages: [], lockedFace: false,
         });
@@ -1206,10 +1206,13 @@ function h3SheetCard(ch) {
       for (const w of j.warnings || []) list.append(el("p", { class: "hint", text: `⚠ ${w}` }));
       if (j.gpu && j.gpu.stoppedLlama) list.append(el("p", { class: "hint", text: `本機 LLM 已依設定還原${j.gpu.restored ? "（已啟回）" : ""}` }));
       paintResult(j);
-      // 重新拉專案，讓 refImages 縮圖（含新圖）出現
+      // 只刷新「這個角色」的參考圖。整批取代 characters 會把使用者這段時間的其他編輯洗掉，
+      // 也會讓剛刪掉的圖（伺服器端已被生圖任務寫回）看起來又復活。
       try {
         const fresh = await api(`/api/projects/${state.slug}`);
-        if (fresh && fresh.project) { state.project.characters = fresh.project.characters; }
+        const srvCh = fresh && fresh.project
+          && (fresh.project.characters || []).find((c) => c.id === ch.id);
+        if (srvCh) { ch.refImages = srvCh.refImages; markDirty(); renderViews(); }
       } catch (_) { /* 拉不到就只顯示上面那組縮圖 */ }
     } else {
       status.className = "hint err-text";
@@ -4946,10 +4949,23 @@ async function createProject() {
 const CHAT_TASKS = {
   story: [
     { id: "story_outline", label: "① 擴寫成完整大綱",
-      prompt: (m) => `請把目前的故事概念擴寫成完整大綱（約 600–1000 字）。\n目前的概念是：「${m.premise || "（尚未填寫，請自行提出一個合理的概念）"}」\n若已有大綱，請以它為骨幹整理並補強，直接給我完整版本。`,
+      prompt: (m) => `請把目前的故事概念擴寫成短劇大綱，只寫三段：鉤子／主線／爆點表`
+        + `（爆點表逐回一行「第N回｜爆點：…｜鉤子：…」）。\n`
+        + `鉤子＝前 3 秒的畫面與第一句台詞，主角一開場就要在災難裡（被追、被逼表態、刀已舉起、正在流血），`
+        + `禁止介紹世界觀與身世。\n`
+        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／`
+        + `視覺 ${(m.style || {}).visualStyle || "—"}／負向 ${(m.style || {}).negative || "—"}。\n`
+        + `目前的概念是：「${m.premise || "（尚未填寫，請自行提出一個能一句話講完的概念再擴寫）"}」\n`
+        + `若已有大綱，請以它為骨幹重寫，直接給我新版本。`,
       applyHint: { fields: ["synopsis"], target: "故事大綱" } },
     { id: "story_chapters", label: "② 依大綱寫成章回",
-      prompt: (m) => `請依目前的大綱寫成章回正文，共 3 回，每回 500–800 字，開頭用「第 N 回　標題」。\n大綱：\n${m.synopsis || "（目前沒有大綱，請先自行擬定一個再寫）"}`,
+      prompt: (m) => `請依目前的大綱寫成章回正文，共 3 回，每回 500–800 字、開頭「第 N 回　標題」。\n`
+        + `每回都要有：開場鉤（第一句就是台詞或聲音，不重述前情）→ 把角色逼到二選一 → `
+        + `一次翻轉或打臉 → 結尾停在未完成的動作或未回答的問句上。\n`
+        + `不准寫收束、不准在結尾解開懸念；正文最後兩行寫「爆點：…」與「鉤子：…」各一句。\n`
+        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／`
+        + `視覺 ${(m.style || {}).visualStyle || "—"}。\n`
+        + `大綱：\n${m.synopsis || "（目前沒有大綱，請先自行擬定一個再寫）"}`,
       applyHint: { fields: ["chapters"], multi: true, target: "整份章回" } },
     { id: "story_style", label: "③ 調整風格", prompt: () => "請依這個故事給出風格設定建議（類型／基調／視覺風格／負向提示），每項一行。",
       applyHint: { fields: ["style"], multi: true, target: "風格四項" } },
@@ -4965,11 +4981,8 @@ const CHAT_TASKS = {
     { id: "character_outfit", label: "② 生成服裝",
       prompt: (c) => `請為「${c.name || c.id}」設計一套符合世界觀的日常服裝，並附英文 promptEn。`,
       applyHint: { fields: ["outfits"], multi: true, target: "服裝" } },
-    { id: "character_background", label: "③ 生成身世背景",
-      prompt: (c) => `請為「${c.name || c.id}」補完身世背景：出身、個性、目標、秘密（各 2–4 句）。`,
-      applyHint: { fields: ["background"], multi: true, target: "身世四欄" } },
-    { id: "character_voice", label: "④ 建議聲音音色",
-      prompt: (c) => `依「${c.name || c.id}」的外型與個性，建議 3 個適合的配音音色，並說明各自的演出方式。`,
+    { id: "character_voice", label: "③ 建議聲音音色",
+      prompt: (c) => `依「${c.name || c.id}」的外型與定位，建議 3 個適合的配音音色，並說明各自的演出方式。`,
       applyHint: { fields: ["voice.desc"], target: "音色描述", variants: true } },
     { id: "custom", label: "幫我改一下這個人物…",
       prompt: () => "請調整這個角色的設定，讓它更有記憶點，但不要推翻已填好的內容：",
@@ -5128,10 +5141,6 @@ const APPLY_FIELDS = {
     ["appearance.body", "體型（appearance.body）"],
     ["appearance.skin", "膚色（appearance.skin）"],
     ["outfits.0.promptEn", "第 1 套服裝 promptEn（沒有服裝時會自動建）"],
-    ["background.birth", "出身（background.birth）"],
-    ["background.personality", "個性（background.personality）"],
-    ["background.goal", "目標（background.goal）"],
-    ["background.secret", "秘密（background.secret）"],
     ["voice.desc", "音色描述（voice.desc）"],
   ],
   scene: [
@@ -5179,11 +5188,6 @@ const MULTI_APPLY_FIELDS = {
     },
   ],
   character: () => [
-    {
-      path: "background", label: "身世四欄（出身／個性／目標／秘密，一起寫）",
-      kind: "background", multi: true, mode: "replace", parse: true,
-      hint: "一行一項：「出身：…」「個性：…」「目標：…」「秘密：…」。",
-    },
     {
       path: "outfits", label: "整份服裝（回覆是一套套服裝時用這個）",
       kind: "outfits", multi: true, mode: "replace", parse: true,

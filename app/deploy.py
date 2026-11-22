@@ -155,6 +155,21 @@ def _hex_ok(v) -> str:
     return s if re.fullmatch(r"#[0-9A-F]{6}", s) else ""
 
 
+_GENDERS = ("男", "女", "其他")
+
+
+def _norm_gender(raw) -> str:
+    """性別只留枚舉值。模型常回「男性，喉結明顯」這種長句，會讓前端下拉選單顯示成空白。"""
+    t = str(raw or "").strip()
+    if t in _GENDERS:
+        return t
+    if t.startswith("男"):
+        return "男"
+    if t.startswith("女"):
+        return "女"
+    return "其他"
+
+
 # 中文／英文色彩詞 → 近似 Hex（只當模型給了非法值時的保底，優先仍用模型給的合法值）
 _COLOR_WORDS = (
     (("黑", "black"), "#1A1614"), (("深褐", "dark brown"), "#2E1E14"), (("褐", "棕", "brown"), "#5A3A22"),
@@ -228,12 +243,13 @@ def _cast_prompt(project: dict, opts: dict, next_id: str) -> tuple[str, str]:
 
 【規則】
 - 恰好 {n} 張人物卡，覆蓋大綱裡真正有戲的人（主角 1 位＋其餘配角）；不要湊人數。
-- appearance 的 age/gender/skin/face/hair/body 各 10–30 字中文，**具體可拍**（不要「很美」「帥氣」這類空話）。
+- appearance 的 age/skin/face/hair/body 各 10–30 字中文，**具體可拍**（不要「很美」「帥氣」這類空話）。
+- appearance.gender **只能填「男」「女」「其他」其中一個**（不准加任何描述；體態細節寫進 body）。
 - appearance.features 2–3 條辨識特徵（疤、痣、飾品、慣用動作造成的痕跡），之後每個鏡頭都要靠它認人。
 - appearance.promptEn 一整段英文（逗號分隔、不換行、60–120 字），順序 age/gender → face → hair → body → 辨識特徵 → 光線與風格。
 - identityAnchors 六個鍵**齊全且非空**（每項 1 句英文或中文短語即可）；colorAnchors 四個值必須是 #RRGGBB（例：#1A1A1A），不得留白或寫顏色名。
 - outfits 只給 1 套：name 中文、desc 中文 15–40 字（材質、顏色、配件）、promptEn 英文服裝描述（30–60 字）。
-- background 四段（birth/personality/goal/secret）各 1–2 句中文；voice.desc 一句音色建議（含語速與音域）。
+- voice.desc 一句音色建議（含語速與音域）。
 - 不要寫英文以外的 promptEn；不要在 promptEn 寫中文名。
 - **輸出要精簡**：整份 JSON 不要超過 3000 字，不要重複同一句描述。
 
@@ -245,7 +261,6 @@ def _cast_prompt(project: dict, opts: dict, next_id: str) -> tuple[str, str]:
       "colorAnchors":{{"hair":"#RRGGBB","eyes":"#RRGGBB","skin":"#RRGGBB","primaryOutfit":"#RRGGBB"}},
       "skinTexture":"","hairStyle":""}},
     "outfits":[{{"name":"","desc":"","promptEn":""}}],
-    "background":{{"birth":"","personality":"","goal":"","secret":""}},
     "voice":{{"desc":""}}}}]}}
 （id 由程式編，不要自己填 id；第一張會是 {next_id} 起算）"""
     user = f"請依上面的故事產出 {n} 張人物卡 JSON。"
@@ -283,6 +298,10 @@ def gen_cast(project: dict, cfg: dict, opts: dict, first_seq: int = 1) -> dict:
                 app[k] = str(app_in.get(k) or "").strip()
                 if not app[k]:
                     raise storygen.GenError(f"「{name}」的 appearance.{k} 是空的（六欄都要填）")
+            raw_gender = app["gender"]
+            app["gender"] = _norm_gender(raw_gender)
+            if app["gender"] != raw_gender:
+                warns.append(f"{name}：性別「{raw_gender[:20]}」不是枚舉值，已收斂為「{app['gender']}」")
             feats = [str(x).strip() for x in (app_in.get("features") or []) if str(x or "").strip()]
             if not feats:
                 raise storygen.GenError(f"「{name}」的 appearance.features 至少要有 1 條辨識特徵")
@@ -304,13 +323,6 @@ def gen_cast(project: dict, cfg: dict, opts: dict, first_seq: int = 1) -> dict:
             if not outfits or not outfits[0]["promptEn"]:
                 raise storygen.GenError(f"「{name}」至少要有 1 套服裝，且 outfits[0].promptEn（英文）不可為空")
 
-            bg_in = c.get("background") if isinstance(c.get("background"), dict) else {}
-            bg = {k: str(bg_in.get(k) or "").strip() for k in ("birth", "personality", "goal", "secret")}
-            bg["relations"] = str(bg_in.get("relations") or "").strip()
-            for k in ("birth", "personality", "goal", "secret"):
-                if not bg[k]:
-                    raise storygen.GenError(f"「{name}」的 background.{k} 是空的（出身/個性/目標/秘密四段都要寫）")
-
             anchors_in = c.get("identityAnchors") if isinstance(c.get("identityAnchors"), dict) else {}
             for k in ("faceShape", "facialFeatures", "uniqueMarks", "skinTexture", "hairStyle"):
                 if not str(anchors_in.get(k) or "").strip():
@@ -330,7 +342,7 @@ def gen_cast(project: dict, cfg: dict, opts: dict, first_seq: int = 1) -> dict:
                 "name": name,
                 "aliases": [str(a).strip() for a in (c.get("aliases") or []) if str(a or "").strip()][:4],
                 "role": str(c.get("role") or "配角").strip(),
-                "appearance": app, "outfits": outfits, "background": bg,
+                "appearance": app, "outfits": outfits,
                 "voice": {"desc": str(voice_in.get("desc") or "").strip(), "refAudio": "", "engine": "", "note": ""},
                 "identityAnchors": anchors,
                 "refImages": [],          # ← 圖片一律留空（等使用者上傳或按生成）
@@ -442,8 +454,6 @@ def gen_script(project: dict, cfg: dict, opts: dict, chars: list[dict], scenes: 
         "id": c["id"], "name": c.get("name"), "role": c.get("role"),
         "外型": (c.get("appearance") or {}).get("promptEn", "")[:160],
         "辨識特徵": (c.get("appearance") or {}).get("features"),
-        "個性": ((c.get("background") or {}).get("personality") or "")[:80],
-        "目標": ((c.get("background") or {}).get("goal") or "")[:80],
     } for c in chars], ensure_ascii=False, indent=1)
     scenes_txt = json.dumps([{"id": s["id"], "name": s.get("name"), "時間": s.get("timeOfDay"),
                               "光線": s.get("lighting"), "氛圍": s.get("mood"),

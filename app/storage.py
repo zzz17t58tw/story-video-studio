@@ -759,7 +759,6 @@ APPLY_FIELD_WHITELIST = {
               "chapters", "chapters.*.title", "chapters.*.body", "chapters.*.summary"},
     "character": {
         "appearance.promptEn", "appearance.face", "appearance.hair", "appearance.body", "appearance.skin",
-        "background.birth", "background.personality", "background.goal", "background.secret",
         "voice.desc",
         "outfits", "outfits.*.name", "outfits.*.desc", "outfits.*.promptEn",
     },

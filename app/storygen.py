@@ -171,8 +171,7 @@ def _card_context(project: dict) -> str:
         looks = "、".join(str(app.get(k)) for k in ("age", "gender", "face", "hair", "body", "features") if app.get(k))
         chars.append({"id": c.get("id"), "name": c.get("name"), "role": c.get("role"),
                       "外型": (app.get("promptEn") or looks or "")[:200],
-                      "服裝": ((c.get("outfits") or [{}])[0].get("desc") if c.get("outfits") else "") or "",
-                      "背景": (c.get("background") or {}).get("personality") or ""})
+                      "服裝": ((c.get("outfits") or [{}])[0].get("desc") if c.get("outfits") else "") or ""})
     scenes = [{"id": s.get("id"), "name": s.get("name"), "時間": s.get("timeOfDay"), "光線": s.get("lighting"),
                "氛圍": s.get("mood"), "描述": (s.get("desc") or "")[:200]}
               for s in project.get("scenes") or [] if isinstance(s, dict)]

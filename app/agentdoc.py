@@ -50,7 +50,7 @@ DATA_MODEL: list[dict[str, Any]] = [
     {"path": "meta", "fields": "id, title, createdAt, updatedAt, fps(預設 24), version", "note": "所有寫入都要更新 updatedAt"},
     {"path": "story", "fields": "synopsis, premise, style{genre,tone,visualStyle,negative}, chapters[]",
      "note": "chapters[]: {id, title, content}"},
-    {"path": "characters[]", "fields": "id, name, aliases[], appearance{face,hair,body,skin,promptEn}, background{birth,personality,goal,secret}, voice{desc}, outfits[], identityAnchors{}, stages[]",
+    {"path": "characters[]", "fields": "id, name, aliases[], appearance{age,gender,face,hair,body,skin,promptEn}, voice{desc}, outfits[], identityAnchors{}, stages[]",
      "note": "identityAnchors 是「逐字貼進 prompt」的鎖臉錨點，不准改寫"},
     {"path": "scenes[]", "fields": "id, name, timeOfDay, lighting, mood, promptEn, props[]", "note": "場景卡（地點），不含對白"},
     {"path": "script.episodes[].scenes[]", "fields": "id(e01s01), title, sceneId, characterIds[], summary, beats[]",
@@ -85,7 +85,7 @@ RECIPES: list[dict[str, Any]] = [
         "steps": [
             "POST /api/projects 建專案（或 GET /api/projects 挑一個）",
             "故事層：POST /api/projects/{slug}/chat（target.kind=story）取得文字 → POST /chat/apply-batch 寫入 synopsis/chapters/style",
-            "人物層：POST /chat（kind=character）→ /chat/apply-batch 寫 appearance/outfits/background/voice",
+            "人物層：POST /chat（kind=character）→ /chat/apply-batch 寫入 appearance/outfits/voice",
             "場景層：POST /chat（kind=scene）→ /chat/apply-batch 寫 desc/promptEn",
             "劇本層：POST /generate/script（dryRun=true 先看）→ POST /apply/bulk 寫入 episodes/scenes/beats",
             "分鏡層：POST /storyboard/build（scope=all）→ GET /storyboard 檢查台詞是否逐字、每鏡 5.17–15.08 秒",

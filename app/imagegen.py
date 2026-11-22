@@ -1486,6 +1486,58 @@ def _generate_character_sheet_impl(project: dict, cid: str, opts: dict) -> dict:
             "warnings": warnings, "loaders": loaders}
 
 
+def merge_character_refs(slug: str, generated: dict, char_ids: list[str] | None = None,
+                         only_paths: set[str] | None = None) -> dict:
+    """只把「這次新產生的參考圖」併進磁碟上的最新版本，不用整份舊快照覆蓋。
+
+    為什麼：立繪／多角度要跑幾分鐘到二十幾分鐘，這段時間使用者可能刪掉參考圖、
+    改了別的欄位。若拿「開始生成時」的 project dict 整份寫回，那些刪除與修改會被蓋回來
+    （實測：刪掉的參考圖在生成完成後又出現）。
+
+    only_paths：本次真正產生的圖檔路徑。有給就只併入這些（避免把使用者剛刪掉的舊圖
+    因為「generated 有、latest 沒有」而被誤判成新圖補回去）。
+    """
+    latest = storage.load_project(slug)
+    ids = char_ids or [c.get("id") for c in (generated.get("characters") or []) if isinstance(c, dict)]
+    added = 0
+    for cid in ids:
+        gen = find_character(generated, cid)
+        cur = find_character(latest, cid)
+        if gen is None or cur is None:
+            continue
+        gen_refs = [r for r in (gen.get("refImages") or []) if isinstance(r, dict) and _s(r.get("path"))]
+        if only_paths is not None:
+            gen_refs = [r for r in gen_refs if _s(r.get("path")) in only_paths]
+        refs = cur.get("refImages") if isinstance(cur.get("refImages"), list) else []
+        cur["refImages"] = refs
+        have = {_s(r.get("path")) for r in refs if isinstance(r, dict)}
+        for r in gen_refs:
+            if _s(r.get("path")) not in have:
+                refs.append(dict(r))
+                have.add(_s(r.get("path")))
+                added += 1
+        if gen.get("lockedFace"):
+            cur["lockedFace"] = True
+        cur["updatedAt"] = storage.now_iso()
+
+    # pipeline.logs：把這次新增的條目補上（用 at+step+訊息前綴去重，不重複貼）
+    gen_logs = (generated.get("pipeline") or {}).get("logs") or []
+    logs = latest.setdefault("pipeline", {}).setdefault("logs", [])
+    seen = {(l.get("at"), l.get("step"), str(l.get("msg"))[:60]) for l in logs if isinstance(l, dict)}
+    for item in gen_logs:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("at"), item.get("step"), str(item.get("msg"))[:60])
+        if key not in seen:
+            logs.append(item)
+            seen.add(key)
+    if len(logs) > 200:
+        del logs[:-200]
+    latest.setdefault("meta", {})["updatedAt"] = storage.now_iso()
+    storage.save_project(slug, latest)
+    return {"ok": True, "addedRefs": added, "characters": len(ids)}
+
+
 def generate_all_character_sheets(project: dict, ids: list[str] | None, opts: dict | None = None) -> dict:
     """count 不限：照 ids 或有的人物卡依序跑（一張 GPU，不能並行）。單一人物失敗不中斷整批。
 
@@ -2131,7 +2183,10 @@ def _run_sheet_job(job_id: str, opts: dict) -> None:
             data = storage.load_project(slug)
             res = _generate_character_sheet_angles_impl(data, cid, {**opts, "_gpuForce": True})
             try:
-                storage.save_project(slug, data)
+                # 只併入這次產生的圖，絕不整份覆蓋：這一張要跑 10–25 分鐘，
+                # 期間使用者可能已經刪掉參考圖、改了別的欄位（整份寫回會讓刪除復活）。
+                new_paths = {_s(res.get("path"))} | {_s(c.get("path")) for c in (res.get("crops") or [])}
+                merge_character_refs(slug, data, [cid], only_paths=new_paths)
             except Exception as e:  # StorageError 在 imagegen 沒 import；一律當寫回失敗處理
                 with _SHEET_LOCK:
                     job.update({"status": "failed", "finishedAt": storage.now_iso(),
