@@ -4949,17 +4949,14 @@ async function createProject() {
 const CHAT_TASKS = {
   story: [
     { id: "story_outline", label: "① 擴寫成完整大綱",
-      prompt: (m) => `請把目前的故事概念擴寫成短劇大綱（三段：開場爆點／主線／爆點與鉤子表）。\n`
-        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／`
-        + `視覺 ${(m.style || {}).visualStyle || "—"}／負向 ${(m.style || {}).negative || "—"}。\n`
-        + `目前的概念是：「${m.premise || "（尚未填寫，請自行提出一個能一句話講完的概念再擴寫）"}」\n`
-        + `若已有大綱，請以它為骨幹重寫，直接給我新版本。`,
+      prompt: (m) => `把故事概念擴寫成短劇大綱，只寫三段：開場爆點／主線／爆點與鉤子表。`
+        + `開場爆點＝前 3 秒抓住注意力的畫面＋一句台詞，不介紹世界觀與身世；爆點是抓住當下注意力的一句台詞或一個畫面，鉤子是結尾讓人想看下一段的未解問題。`
+        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／視覺 ${(m.style || {}).visualStyle || "—"}／負向 ${(m.style || {}).negative || "—"}；概念：「${m.premise || "（未填，自行提出一個能一句話講完的概念）"}」。`,
       applyHint: { fields: ["synopsis"], target: "故事大綱" } },
     { id: "story_chapters", label: "② 依大綱寫成章回",
-      prompt: (m) => `請依目前的大綱寫成章回正文，共 3 回。\n`
-        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／`
-        + `視覺 ${(m.style || {}).visualStyle || "—"}。\n`
-        + `大綱：\n${m.synopsis || "（目前沒有大綱，請先自行擬定一個再寫）"}`,
+      prompt: (m) => `依大綱寫成 3 回章回，每回 500–800 字、開頭「第 N 回　標題」。`
+        + `每回順序：開場爆點 → 逼到二選一 → 中段爆點 → 結尾鉤子；爆點抓注意力，鉤子留未解問題，不准收束。`
+        + `風格：類型 ${(m.style || {}).genre || "—"}／基調 ${(m.style || {}).tone || "—"}／視覺 ${(m.style || {}).visualStyle || "—"}；大綱：${m.synopsis || "（沒有大綱，請先自行擬定一個再寫）"}。`,
       applyHint: { fields: ["chapters"], multi: true, target: "整份章回" } },
     { id: "story_style", label: "③ 調整風格", prompt: () => "請依這個故事給出風格設定建議（類型／基調／視覺風格／負向提示），每項一行。",
       applyHint: { fields: ["style"], multi: true, target: "風格四項" } },
