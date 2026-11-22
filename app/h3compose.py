@@ -481,12 +481,40 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
 
             has_new = any(s.get("beatIds") for s in es_shots)
             has_any_ref = any(s.get("beatIds") or s.get("dialogBeatIds") for s in es_shots)
+            # 這一場到底有幾個 beat 被鏡頭演到（beatIds 優先，舊欄位 fallback）。
+            # 部署產生的鏡頭只挑台詞、從不引用動作 beat → 這類「有引用但沒演完」的場次
+            # 以前完全不報，使用者只會看到「影片看不出在演什麼」卻找不到原因。
+            covered_all: set[str] = set()
+            for s in es_shots:
+                ids_s = [x for x in (s.get("beatIds") or []) if isinstance(x, str)]
+                if not ids_s:
+                    ids_s = [x for x in (s.get("dialogBeatIds") or []) if isinstance(x, str)]
+                covered_all |= set(ids_s)
+            unshot = [b for b in beats if str(b.get("id")) and str(b.get("id")) not in covered_all]
+            unshot_lines = [b for b in unshot if _s(b.get("type") or "dialogue") != "action"]
             if es_shots and not has_any_ref:
                 # 舊專案：整場都沒引用任何 beat → 不當錯誤擋人（V1 不誤傷舊資料）
                 issues.append(_issue("warn", "episodeScene", es_id,
                                      f"此場次尚未分鏡：{len(beats)} 個 beats 沒有任何鏡頭以 beatIds 引用"
                                      f"（可用「🎬 由劇本自動分鏡」依劇本重生分鏡）", label))
                 continue
+            _covered_has_line = any(
+                _s(b.get("type") or "dialogue") != "action"
+                for b in (beat_by_id.get(str(x)) for x in covered_all) if isinstance(b, dict))
+            if unshot_lines and not unshot and _covered_has_line:
+                # 整場的 beat 都被演到，但台詞一句都沒引用 → 分鏡只演了畫面（V2 的主體會接手報）
+                active_lines = [b for b in beats if _s(b.get("type") or "dialogue") != "action"]
+                issues.append(_issue("error", "episodeScene", es_id,
+                                     f"這一場有 {len(active_lines)} 句台詞沒有任何鏡頭引用"
+                                     f"（{'、'.join(str(b.get('id')) for b in active_lines)}）", label))
+            elif unshot:
+                # 有動作／台詞 beat 沒有鏡頭 → 品質提醒（不擋生成），要講清楚是哪幾個
+                issues.append(_issue("warn", "episodeScene", es_id,
+                                     f"劇本有 {len(beats)} 個演出點，鏡頭只演了 {len(beats) - len(unshot)} 個："
+                                     f"{'、'.join(str(b.get('id')) for b in unshot[:8])}"
+                                     f"{'…' if len(unshot) > 8 else ''} 沒有對應鏡頭"
+                                     f"（用「🎬 由劇本自動分鏡」可一次補齊，動作 beat 目前不會自動生成鏡頭）",
+                                     label))
             if not has_new:
                 # 有 dialogBeatIds 但沒有 beatIds（M12a 時期的資料）→ 要求升級格式
                 issues.append(_issue("warn", "episodeScene", es_id,
@@ -566,9 +594,15 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
     for s in shots:
         ctx = find_scene_ctx(data, s)
         picked, _src, _errs = shot_dialog_lines(s, ctx)
-        if not picked:
-            continue
+        # V4 不看 validate 分支的錯誤訊息（那屬於 ① 台詞覆蓋），只算「這一鏡實際會唸的字」。
+        # 舊資料的 dialogLineRefs 指到不存在的句子時 picked 會是空的，這裡就沒有字可算。
         chars = sum(_nonspace_len(b.get("line")) for _n, b in picked)
+        # 本鏡臨時台詞（shot.dialogue）沒有 beat、不在 V2 覆蓋範圍內 → 這裡要自己算進來，
+        # 否則「台詞唸不完」只在有 beat 引用時才檢查，手動寫的台詞會被截斷。
+        free_lines = [_s(x.get("line") if isinstance(x, dict) else x) for x in (s.get("dialogue") or [])]
+        chars += sum(_nonspace_len(x) for x in free_lines if x)
+        if not chars:
+            continue
         need = chars / 4.5
         try:
             dur = float(s.get("durationSec") or 0)
@@ -595,6 +629,7 @@ def validate_project(data: dict) -> dict:
     scenes = data.get("scenes") or []
 
     # ① 台詞覆蓋（M12a：dialogBeatIds 優先、舊 dialogLineRefs 退回）：完整覆蓋所屬場次 dialogue
+    fixes: list[str] = []      # 「已自動處理」的說明，不當 issue（前端顯示在獨立區塊）
     for ep in ((data.get("script") or {}).get("episodes") or []):
         for es in (ep.get("scenes") or []):
             dlg = [b for b in (es.get("beats") or [])
@@ -604,6 +639,19 @@ def validate_project(data: dict) -> dict:
                 if sh.get("episodeSceneId") != es.get("id"):
                     continue
                 picked, source, errs = shot_dialog_lines(sh, {"es": es, "ep": ep})
+                # 舊資料的衍生欄位 dialogLineRefs 指到不存在的句子／重複時：
+                # 1) 不再報「超範圍」——那只是同一句台詞的另一種說法，會與場次的
+                #    「第 1、2 句沒覆蓋」成對出現，使用者看到兩條只會更混亂；
+                # 2) 保住畫面：改引用「同一鏡 beatIds 的第一句台詞」或「場次第 1 句」，
+                #    讓正在出片的專案不會因為一個舊欄位而整個被擋。
+                bad_refs = [e for e in errs if str(e).startswith("dialogLineRefs")]
+                if sh.get("dialogBeatIds") or (bad_refs and dlg):
+                    errs = [e for e in errs if not str(e).startswith("dialogLineRefs")]
+                    if bad_refs and not picked:
+                        picked = [(1, dlg[0])]
+                        fixes.append(f"{es.get('id')}／第 {sh.get('no')} 鏡：舊台詞編號 "
+                                     f"{(sh.get('dialogLineRefs') or [])} 對不上這一場的 {len(dlg)} 句，"
+                                     f"已暫用第 1 句（請到鏡頭頁重新勾選台詞）")
                 for msg in errs:
                     issues.append(_issue("error", "shot", sh.get("id"), msg, f"第 {sh.get('no')} 鏡"))
                 covered |= {n for n, _ in picked}
@@ -722,7 +770,7 @@ def validate_project(data: dict) -> dict:
 
     counts = {"error": sum(1 for i in issues if i["level"] == "error"),
               "warn": sum(1 for i in issues if i["level"] == "warn")}
-    return {"issues": issues, "counts": counts,
+    return {"issues": issues, "counts": counts, "fixes": fixes,
             "checked": {"shots": len(data.get("shots") or []), "scenes": len(scenes),
                         "characters": len(chars), "fps": fps},
             "at": _now()}

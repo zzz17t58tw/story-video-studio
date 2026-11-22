@@ -3422,6 +3422,21 @@ function storyboardTable(rows) {
     wrap.append(el("p", { class: "hint", text: "尚未分鏡。按上方「🎬 由劇本自動分鏡」依劇本 beats 產生。" }));
     return wrap;
   }
+  // 「劇本寫了、鏡頭沒演」的缺口：這是以往看不出「影片不懂在演什麼」的主因之一，
+  // 部署產生的鏡頭只挑台詞，動作 beat 從不進 beatIds。這裡明列是哪幾個演出點沒鏡頭。
+  const gaps = (rows.scenes || []).filter((s) => (s.unshotCount || 0) > 0);
+  if (gaps.length) {
+    const box = el("div", { class: "sb-gap-box" });
+    box.append(el("div", { class: "hint", style: "margin-bottom:4px" },
+      el("b", { text: `⚠ 劇本有 ${rows.unshotTotal || gaps.reduce((a, s) => a + s.unshotCount, 0)} 個演出點沒有對應鏡頭` }),
+      el("span", { text: "（沒被演出來的台詞與動作，觀眾看不到）" })));
+    for (const g of gaps) {
+      box.append(el("div", { class: "hint", style: "margin-left:8px", text: `· ${g.title || g.episodeSceneId}：${g.note}` }));
+    }
+    box.append(el("div", { class: "hint", style: "margin-top:4px",
+      text: "要補齊請按上方「🎬 由劇本自動分鏡」（動作 beat 目前不會自動生成鏡頭，需在那之後人工加鏡）。" }));
+    wrap.append(box);
+  }
   const table = el("table", { class: "m3d-table sb-table" });
   table.append(el("thead", {},
     el("tr", {},
@@ -3711,6 +3726,16 @@ function paintValidate(box, res) {
     el("button", { class: "btn btn-small", type: "button", onclick: () => { state.validateResult = null; renderShots(); } }, "收起"),
   ));
   const list = res.issues || [];
+  const fixes = res.fixes || [];
+  if (fixes.length) {
+    // 「已自動處理」獨立一區：與「需要你決定」混在一起時，使用者會把已修好的東西當成沒修。
+    const fbox = el("div", { class: "card validate-fixes" });
+    fbox.append(el("div", { class: "card-head" },
+      el("h3", { text: `✅ 已自動處理 ${fixes.length} 項` }),
+      el("span", { class: "hint", text: "這些不是錯誤，但建議到對應頁面確認一次" })));
+    for (const f of fixes) fbox.append(el("p", { class: "hint", text: `· ${f}` }));
+    box.append(fbox);
+  }
   if (!list.length) {
     box.append(el("p", { class: "hint ok-text", text: "全部通過，沒有問題。" }));
     return;

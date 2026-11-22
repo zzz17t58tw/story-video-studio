@@ -618,6 +618,46 @@ def storyboard_rows(project: dict) -> dict:
             "mergedCount": len(picked),
             "beatPart": sh.get("beatPart") or None,
         })
+    # 每場次「劇本有、但沒有任何鏡頭演出」的 beat（M14 契約 V1 的盲點：
+    # 部署產生的鏡頭只挑台詞，動作 beat 從未進 beatIds，validate 也不會報）。
+    # 只做唯讀統計給人看，不改資料、不自動補鏡（補鏡屬於重建分鏡，要走 /storyboard/build）。
+    shot_by_es: dict[str, list[dict]] = {}
+    for s in shots:
+        shot_by_es.setdefault(_s(s.get("episodeSceneId")), []).append(s)
+    scenes_info: list[dict] = []
+    for ep in ((project.get("script") or {}).get("episodes") or []):
+        for es in (ep.get("scenes") or []):
+            es_id = _s(es.get("id"))
+            if not es_id:
+                continue
+            beats = scene_beats(es)
+            es_shots = shot_by_es.get(es_id) or []
+            covered: set[str] = set()
+            for s in es_shots:
+                ids = [x for x in (s.get("beatIds") or []) if isinstance(x, str)]
+                if not ids:
+                    ids = [x for x in (s.get("dialogBeatIds") or []) if isinstance(x, str)]
+                covered |= set(ids)
+            unshot = [{"beatId": _s(b.get("id")), "type": _s(b.get("type") or "dialogue"),
+                       "line": _s(b.get("line"))[:60],
+                       "characterIds": [b.get("characterId")] if _s(b.get("characterId")) else []}
+                      for b in beats if _s(b.get("id")) and _s(b.get("id")) not in covered]
+            missing_lines = [u["beatId"] for u in unshot if u["type"] != "action"]
+            if unshot:
+                note = (f"劇本有 {len(beats)} 個演出點，鏡頭只演了 {len(beats) - len(unshot)} 個："
+                        f"{'、'.join(u['beatId'] for u in unshot)} 沒有對應鏡頭"
+                        + (f"（其中 {len(missing_lines)} 個是台詞）" if missing_lines else ""))
+            elif beats:
+                note = f"劇本 {len(beats)} 個演出點全部有鏡頭"
+            else:
+                note = "此場次尚無演出點（beats）"
+            scenes_info.append({
+                "episodeSceneId": es_id, "title": es.get("title") or "",
+                "beatCount": len(beats), "shotCount": len(es_shots),
+                "unshot": unshot, "unshotCount": len(unshot),
+                "unshotLineCount": len(missing_lines), "note": note,
+            })
     return {"rows": rows, "shotCount": len(rows), "totalSeconds": round(t, 2),
+            "scenes": scenes_info, "unshotTotal": sum(x["unshotCount"] for x in scenes_info),
             "beatCount": sum(len(es.get("beats") or []) for ep in ((project.get("script") or {}).get("episodes") or [])
                              for es in (ep.get("scenes") or []))}

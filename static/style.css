@@ -579,6 +579,8 @@ body.has-batch .toolbar { position: static; }
 
 /* ── M14a：分鏡表＋職責（docs/storyboard-contract.md v1）────────────── */
 .sb-table-card { padding: 12px 14px; }
+.sb-gap-box { margin: 8px 0 10px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid rgba(255, 186, 64, .45); background: rgba(255, 186, 64, .07); line-height: 1.6; }
 .sb-table { font-size: 13px; }
 .sb-table th { position: sticky; top: 0; background: var(--bg-2); }
 .sb-table td { vertical-align: top; padding: 6px 8px; }
