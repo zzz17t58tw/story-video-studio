@@ -1066,6 +1066,26 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
         scene_ids = [body.sceneId]
     # 舊欄位先收斂（beats → legacyBeats），再重建；重建完再跑同一支校驗
     notes = storyboard.migrate_shot_fields(data)
+    es_all = [es.get("id") for ep in ((data.get("script") or {}).get("episodes") or [])
+              for es in (ep.get("scenes") or []) if es.get("id")]
+    # 台詞長到一鏡唸不完（>15.08 秒）時，光靠分鏡層無解（V4 會一直是 error）→
+    # 先依標點把那種 beat 拆開（一字不改），拆完再重建分鏡。
+    # 兩段式：① 先拆「沒被任何鏡頭引用」的（安全）；② 重建分鏡（重建會換掉舊鏡頭，
+    # 引用自然消失），再把剩下沒拆的（原被引用）拆一次並**重建第二次**。
+    # 只拆一次的話，被舊鏡頭引用著的長台詞永遠拆不掉（V4 的 error 也就永遠在）。
+    def _split_pass(ids: list[str]) -> list[str]:
+        made: list[str] = []
+        for es_id in ids:
+            try:
+                r = storyboard.split_long_beats(data, es_id)
+                notes.extend(r["warnings"])
+                made += [f"{b.get('id')}" for b in r["created"]]
+            except Exception:  # noqa: BLE001 — 拆不動就照原樣重建，不要擋人
+                log.exception("split_long_beats 失敗：%s", es_id)
+        return made
+
+    scope_ids = scene_ids or es_all
+    split_all = _split_pass(scope_ids)
     # 重建前先記下「原本就有的錯誤」——重建後新增的契約錯誤才擋寫檔（不因既有問題擋人）
     before = h3compose.validate_project(data)
     before_err = {(i.get("scope"), i.get("targetId"), i.get("message")) for i in before["issues"]
@@ -1085,7 +1105,9 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
     if new_errors:
         # 契約 §5：驗不過就不落檔。回 400 讓使用者看得到為什麼（不寫半套資料）
         return _fail(400, "分鏡結果未通過契約驗證，未寫檔：" + "；".join(
-            f"{i.get('name') or i.get('targetId')}：{i.get('message')}" for i in new_errors[:5]))
+            f"{i.get('name') or i.get('targetId')}：{i.get('message')}" for i in new_errors[:5])
+            + "。建議：資料被手動改過（台詞被改字／舊格式引用）時，先到劇本頁確認台詞，"
+              "或改用「🎬 由劇本自動分鏡」重建整場。")
     try:
         storage.save_project(slug, data)
     except StorageError as e:

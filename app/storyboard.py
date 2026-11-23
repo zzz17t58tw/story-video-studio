@@ -60,11 +60,6 @@ def _s(v: Any) -> str:
     return str(v or "").strip()
 
 
-def _chars(text: Any) -> int:
-    """字數（不含空白）——與 storygen._nonspace_len / estimate_durations 同一算法。"""
-    return storygen._nonspace_len(text)
-
-
 def _is_dialogue(b: dict) -> bool:
     return _s(b.get("type") or "dialogue") != "action"
 
@@ -172,7 +167,12 @@ def _split_long_beat(b: dict, fps: int) -> list[dict] | None:
     if len(boxes) < 2:
         return None
     total = len(boxes)
-    return [{**b, "line": boxes[i], "_part": {"beatId": str(b.get("id")), "part": i + 1, "total": total}}
+    # 第二段起給獨立 id（`<原id>p2`…）：piece 與原 beat 同 id 會讓 beatIds 出現
+    # ['b04','b04']，V1 與「dialogBeatIds 重複引用」直接變 error（實測）。
+    # 這樣「拆長台詞」才能真的修掉 V4，而不是把它換成另一條錯誤。
+    return [{**b, "id": (str(b.get("id")) if i == 0 else f"{b.get('id')}p{i + 1}"),
+             "line": boxes[i],
+             "_part": {"beatId": str(b.get("id")), "part": i + 1, "total": total}}
             for i in range(total)]
 
 
@@ -363,6 +363,35 @@ def build_scene_shots(project: dict, es_id: str, opts: dict | None = None) -> di
         return {"shots": [], "warnings": [f"場次 {es.get('id')} 沒有 beats（_skipped 不算），先到劇本頁補內容"],
                 "groups": [], "esId": es_id, "beatCount": 0}
 
+    # 沒有 _part 標記時，group_beats 會把拆出來的 `b04p2` 當成「獨立的短 beat」，
+    # 再與 b04 合併 → beatIds 指向場次裡不存在的 id（V1 error）。這裡先把同一顆原
+    # beat 的各段收斂回去（part 標記沿用 _split_long_beat 的慣例）。
+    by_origin: dict[str, list[dict]] = {}
+    for b in beats:
+        origin = str(b.get("id") or "")
+        if origin and "p" in origin:
+            base = re.sub(r"p\d+x*$", "", origin)
+            if base in {str(x.get("id")) for x in beats}:
+                by_origin.setdefault(base, [base]).append(origin)
+    if by_origin:
+        index = {str(b.get("id")): b for b in beats}
+        rebuilt: list[dict] = []
+        for b in beats:
+            bid = str(b.get("id") or "")
+            base = re.sub(r"p\d+x*$", "", bid)
+            if base != bid and base in index:
+                continue                       # 附屬段留到原 beat 的位置一次展開
+            group_ids = by_origin.get(bid)
+            if group_ids:
+                n = len(group_ids)
+                for i, gid in enumerate(group_ids):
+                    piece = dict(index.get(gid) or b)
+                    piece["_part"] = {"beatId": bid, "part": i + 1, "total": n}
+                    rebuilt.append(piece)
+            else:
+                rebuilt.append(b)
+        beats = rebuilt
+
     groups, warns, _lines = group_beats(beats, fps)
     out: list[dict] = []
     for idx, g in enumerate(groups):
@@ -417,6 +446,96 @@ def build_scene_shots(project: dict, es_id: str, opts: dict | None = None) -> di
     total = round(sum(sh["durationSec"] for sh in out), 2)
     return {"shots": out, "warnings": warns, "groups": groups,
             "esId": es.get("id"), "beatCount": len(beats), "totalSeconds": total}
+
+
+def split_long_beats(project: dict, es_id: str) -> dict:
+    """把「一句台詞長到一鏡唸不完」的 beat 拆成多個 beat（只切在標點，台詞一字不改）。
+
+    為什麼需要：V4「台詞唸不完」在台詞超過單鏡上限 15.08 秒時無解——分鏡層只能拆鏡，
+    但拆鏡不能改台詞，拆的動作只能發生在劇本層（這裡）。部署／模型寫出的長台詞是中英
+    混雜＋逗號串，一鏡 60 字以上很常見，使用者只會看到紅色錯誤卻不知道能怎麼修。
+
+    規則（不新增資料結構，沿用既有 `beatPart` 精神）：
+    - 只在「單一 beat 估時 > 15.08 秒」時拆；切段沿用 `_split_long_beat()` 的貪心裝箱
+      （每段吸附後仍 ≤ 15.08 秒，台詞逐字保留）；
+    - 切點只取原文標點（，,。、；;！!？?空白），台詞逐字保留；
+    - 新段 id 為 `<原id>p2`、`<原id>p3`（同場次內唯一，不動其他 beat 的 id）；
+    - 既有 `_skipped` beats 不動；被別處引用（beatIds／dialogBeatIds）的 beat 不拆，
+      改回 warning 請使用者手動處理，避免把引用指到不存在的 id。
+
+    只就地修改傳入的 project（呼叫端自己 save_project）。回 {split, created, warnings}。
+    """
+    warnings: list[str] = []
+    created: list[dict] = []
+    es = _find_es(project, es_id)
+    if es is None:
+        return {"split": 0, "created": [], "warnings": [f"找不到場次 {es_id}"]}
+    beats = es.get("beats") or []
+    max_sec = FRAME_MAX / FPS_DEFAULT
+    # 被任何鏡頭引用過的 beat 不拆
+    referenced: set[str] = set()
+    for s in (project.get("shots") or []):
+        if not isinstance(s, dict):
+            continue
+        for key in ("beatIds", "dialogBeatIds"):
+            referenced |= {str(x) for x in (s.get(key) or []) if isinstance(x, str)}
+
+    new_beats: list[dict] = []
+    used_ids = {str(b.get("id")) for b in beats if isinstance(b, dict)}
+    for b in beats:
+        if not isinstance(b, dict) or b.get("_skipped"):
+            new_beats.append(b)
+            continue
+        bid = _s(b.get("id"))
+        est = _estimate_group([b])
+        if est <= max_sec:
+            new_beats.append(b)
+            continue
+        if bid in referenced:
+            warnings.append(f"beat {bid} 估 {est:.1f} 秒超過單鏡上限，但已被鏡頭引用 → 未自動拆"
+                            f"（請先解除該鏡的引用再拆，或手動在劇本頁拆句）")
+            new_beats.append(b)
+            continue
+        if not _split_long_beat(b, FPS_DEFAULT):
+            warnings.append(f"beat {bid} 估 {est:.1f} 秒超過單鏡上限，但找不到可切的標點 → 未拆")
+            new_beats.append(b)
+            continue
+        parts = _split_long_beat(b, FPS_DEFAULT) or []
+        pieces = [p for p in parts if _s(p.get("line"))]
+        # 貪心裝箱：太短的尾段（H3 最短 5.17 秒）與前一塊併回去，併不回去才留獨立一段。
+        # 不做的話「Master... it aches for your touch.」會被切成 14.0 秒 + 3.3 秒，
+        # 後者只能靠留白硬撐，等於白多一顆鏡頭。
+        keep: list[dict] = []
+        for piece in pieces:
+            if keep:
+                cand = {**piece, "line": _s(keep[-1].get("line")) + _s(piece.get("line"))}
+                if _estimate_group([piece]) < FRAME_MIN / FPS_DEFAULT and \
+                        _estimate_group([cand]) <= max_sec:
+                    keep[-1] = cand
+                    continue
+            keep.append(dict(piece))
+        if len(keep) < 2:
+            warnings.append(f"beat {bid} 的長台詞切不成兩段以上（每段都太短）→ 未拆")
+            new_beats.append(b)
+            continue
+        for i, piece in enumerate(keep):
+            nb = dict(piece)
+            nb.pop("_part", None)
+            if i == 0:
+                nb["id"] = bid
+            else:
+                nid = f"{bid}p{i + 1}"
+                while nid in used_ids:
+                    nid = f"{nid}x"
+                used_ids.add(nid)
+                nb["id"] = nid
+            new_beats.append(nb)
+            created.append(nb)
+        warnings.append(f"beat {bid} 估 {est:.1f} 秒超過單鏡上限 {max_sec:.2f} 秒，"
+                        f"台詞已拆成 {len(keep)} 段（只切標點、一字未改）")
+    if created:
+        es["beats"] = new_beats
+    return {"split": len(created), "created": created, "warnings": warnings}
 
 
 def _next_shot_seq(shots: list[dict]) -> int:

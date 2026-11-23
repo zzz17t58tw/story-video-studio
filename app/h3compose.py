@@ -611,10 +611,25 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
             continue
         speakable = dur - pad
         if speakable + 0.01 < need:
+            # 合法影格（124–362 幀＝5.17–15.08 秒）的硬上限是 15.08 秒，換算成字數上限；
+            # 台詞超過它時「請加長」是空話（加長也生不出來），必須講拆鏡。使用者看到的
+            # 5.17 秒其實是「最短 124 幀」——原文只寫「只剩 5.17 秒」看不出這層。
+            max_frames = 362
+            need_frames = int(-(-need * fps // 1))
+            over_limit = need > max_frames / fps - 0.05
+            if over_limit:
+                tail = (f"{max_frames} 幀（{max_frames / fps:.2f} 秒）是單鏡上限 → 一定要拆鏡，"
+                        f"建議拆成 {max(2, -(-need_frames // max_frames))} 鏡")
+            elif need_frames <= 124:
+                tail = (f"{need:.2f} 秒在最短 124 幀（5.17 秒）以內，只要把 durationSec 設到 "
+                        f"{need + pad:.2f} 秒即可（不用拆鏡）")
+            else:
+                tail = (f"請把 durationSec 設到至少 {need + pad:.2f} 秒"
+                        f"（{frames_for(need + pad, fps)['legal']} 幀）或拆鏡")
             issues.append(_issue(
                 "error", "shot", s.get("id"),
                 f"台詞唸不完（合約 V4）：{chars} 字需 {need:.2f} 秒，扣掉留白 {pad:g}s 只剩 {speakable:.2f} 秒"
-                f"（durationSec={dur:g}）→ 配音會被截斷；請加長或拆鏡",
+                f"（durationSec={dur:g}）→ 配音會被截斷；{tail}",
                 f"第 {s.get('no')} 鏡"))
         if pad < -0.001:
             issues.append(_issue("error", "shot", s.get("id"),
@@ -787,7 +802,11 @@ def _merge_missing_ref_issues(issues: list[dict]) -> list[dict]:
         msg = _s(it.get("message"))
         is_missing = (it.get("level") == "warn" and it.get("scope") == "shot"
                       and (msg.endswith("→ 送 H3 時是 weak reference")
-                           or msg.endswith("→ 場景一致性只能靠文字")))
+                           or msg.endswith("→ 場景一致性只能靠文字")
+                           # 已經併過一次的訊息尾巴是「（被 第 1 鏡、第 2 鏡 用到）」，
+                           # 逐鏡掃描時會讓同一筆又被當成新的一筆加回來（實測 7 鏡會長出 6 條）。
+                           or "→ 送 H3 時是 weak reference（被 " in msg
+                           or "→ 場景一致性只能靠文字（被 " in msg))
         if is_missing:
             key = _missing_ref_key(msg)
             if key not in merged:
