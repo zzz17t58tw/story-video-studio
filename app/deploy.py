@@ -25,6 +25,15 @@ from . import h3compose, llm, prompts, storage, storygen
 STEPS = ("cast", "locations", "script", "shots")
 STEP_LABEL = {"cast": "角色卡", "locations": "場景卡", "script": "劇本", "shots": "分鏡",
               "done": "完成", "failed": "失敗", "queued": "排隊中"}
+# 一鍵佈署的範圍（v0.9.16 起拆開）：每張按鈕只跑自己那幾步，不再一次跑完四層。
+SCOPES = {
+    "all": ("cast", "locations", "script", "shots"),
+    "cast_locations": ("cast", "locations"),
+    "script": ("script",),
+    "shots": ("shots",),
+}
+SCOPE_LABEL = {"all": "全部（角色／場景／劇本／分鏡）", "cast_locations": "角色與場景",
+               "script": "劇本", "shots": "分鏡"}
 MAX_TOKENS = 8192          # storygen 實測：4096 會被思考內容吃光（finish_reason=length）
 ATTEMPTS = 3               # 每個步驟最多 3 次（本機模型截斷是機率問題，2 次不夠穩）
 FRAME_MIN, FRAME_MAX = 124, 362   # H3 訓練域（17k+5）
@@ -65,7 +74,12 @@ def norm_opts(opts: dict | None) -> dict:
             v = default
         return max(lo, min(v, hi))
 
+    scope = str(o.get("scope") or "all").strip()
+    if scope not in SCOPES:
+        scope = "all"
     return {
+        "scope": scope,
+        "scopeLabel": SCOPE_LABEL[scope],
         "characterCount": _int("characterCount", 3, 1, 8),
         "sceneCount": _int("sceneCount", 2, 1, 8),
         "shotCount": _int("shotCount", 6, 1, 24),   # 語意＝整個劇本的**總**鏡數（由 allocate_shots 分配到各場）
@@ -117,6 +131,27 @@ def _purge(project: dict) -> dict:
     project["script"] = {"episodes": []}
     project["shots"] = []
     return old
+
+
+def _purge_script_layer(project: dict) -> dict:
+    """範圍＝劇本：只清劇本與鏡頭（角色／場景保留，因為它們是劇本的輸入）。"""
+    old = {
+        "characters": [],
+        "scenes": [],
+        "episodes": [e for e in ((project.get("script") or {}).get("episodes") or []) if isinstance(e, dict)],
+        "shots": [s for s in (project.get("shots") or []) if isinstance(s, dict)],
+    }
+    project["script"] = {"episodes": []}
+    project["shots"] = []
+    return old
+
+
+def _purge_shots_of_scenes(project: dict, es_ids: set[str]) -> dict:
+    """範圍＝分鏡：只清「這幾場」的鏡頭（別集／別場的鏡頭不動）。"""
+    shots_now = [s for s in (project.get("shots") or []) if isinstance(s, dict)]
+    gone = [s for s in shots_now if s.get("episodeSceneId") in es_ids]
+    project["shots"] = [s for s in shots_now if s.get("episodeSceneId") not in es_ids]
+    return {"characters": [], "scenes": [], "episodes": [], "shots": gone}
 
 
 def _media_paths(old: dict) -> list[str]:
@@ -1096,6 +1131,13 @@ def run_steps_landing(job_id: str, slug: str, cfg: dict, opts: dict,
       而且任何一步失敗＝十幾分鐘全白做。
     - 改成每層各自生成、驗證通過立刻落地，模型每次只扛一小包，失敗時前面的資料留著。
     """
+    scope = str(opts.get("scope") or "all")
+    if scope == "cast_locations":
+        return _run_cast_locations(job_id, slug, cfg, opts, progress, done_steps)
+    if scope == "script":
+        return _run_script_only(job_id, slug, cfg, opts, progress, done_steps)
+    if scope == "shots":
+        return _run_shots_only(job_id, slug, cfg, opts, progress, done_steps)
     t_start = time.time()
     project = storage.load_project(slug)
     fps = int((project.get("meta") or {}).get("fps") or 24)
@@ -1240,6 +1282,188 @@ def run_steps_landing(job_id: str, slug: str, cfg: dict, opts: dict,
         pass
 
 
+def _run_cast_locations(job_id: str, slug: str, cfg: dict, opts: dict, progress, done_steps: list) -> dict:
+    """範圍＝角色與場景：只跑前兩層。
+
+    覆蓋時仍然清空四層——角色／場景換新 id 後，舊劇本與鏡頭的引用會全部失效，
+    留著只會讓 validate 爆引用錯誤，所以「覆蓋角色與場景」＝下面兩層也要重建。
+    """
+    t_start = time.time()
+    project = storage.load_project(slug)
+    timings: dict[str, float] = {}
+    warn_by: dict[str, list] = {}
+    written = {"characters": 0, "scenes": 0, "episodeScenes": 0, "shots": 0}
+    agg = {"characters": [], "scenes": [], "mediaDeleted": 0}
+    old_images: list[str] = []
+    purged = {"done": False}
+
+    def flush_job() -> None:
+        warns = [w for k in ("cast", "locations") for w in (warn_by.get(k) or [])]
+        _set(job_id, written=dict(written), warnings=warns, warningsByStep=dict(warn_by), timings=dict(timings))
+
+    # 1) 角色卡 → 落地
+    progress("cast", "產生角色卡…")
+    t = time.time()
+    first_c = 1 if opts["overwrite"] else int(
+        re.sub(r"\D", "", storage.next_id(project.get("characters") or [], "c")) or 1)
+    cast = gen_cast(project, cfg, opts, first_seq=first_c)
+    chars = cast["preview"]["characters"]
+    warn_by["cast"] = cast["warnings"]
+    timings["cast"] = round(time.time() - t, 1)
+    done_steps.append("cast")
+    if opts["overwrite"] and not purged["done"]:
+        old = _purge(project)
+        old_images = _media_paths(old)
+        purged["done"] = True
+    _land_chars(project, chars)
+    _save_now(slug, project)
+    written["characters"] = len(chars)
+    agg["characters"] = [c["id"] for c in chars]
+    flush_job()
+    _check_cancel(job_id)
+
+    # 2) 場景卡 → 落地
+    progress("locations", "產生場景卡…")
+    t = time.time()
+    first_sc = 1 if opts["overwrite"] else int(
+        re.sub(r"\D", "", storage.next_id(project.get("scenes") or [], "sc")) or 1)
+    locs = gen_locations(project, cfg, opts, chars, first_seq=first_sc)
+    scns = locs["preview"]["scenes"]
+    warn_by["locations"] = locs["warnings"]
+    timings["locations"] = round(time.time() - t, 1)
+    done_steps.append("locations")
+    _land_scenes(project, scns)
+    _save_now(slug, project)
+    written["scenes"] = len(scns)
+    agg["scenes"] = [s["id"] for s in scns]
+    flush_job()
+
+    if old_images:
+        agg["mediaDeleted"] = _delete_media(slug, old_images)
+    flush_job()
+    return {"result": {**written, "episodes": 0, "mediaDeleted": agg["mediaDeleted"],
+                       "ids": {"characters": agg["characters"], "scenes": agg["scenes"],
+                               "episodeId": "", "shots": []}},
+            "warnings": [w for k in ("cast", "locations") for w in (warn_by.get(k) or [])],
+            "warningsByStep": warn_by, "timings": timings}
+
+
+def _run_script_only(job_id: str, slug: str, cfg: dict, opts: dict, progress, done_steps: list) -> dict:
+    """範圍＝劇本：用**專案現有**的角色／場景卡寫一集（這些卡不動）。"""
+    project = storage.load_project(slug)
+    chars = [c for c in (project.get("characters") or []) if isinstance(c, dict)]
+    scns = [s for s in (project.get("scenes") or []) if isinstance(s, dict)]
+    if not chars or not scns:
+        raise DeployError("角色或場景還是空的：請先在故事頁按「一鍵佈署到角色與場景」", step="script")
+    timings: dict[str, float] = {}
+    warn_by: dict[str, list] = {}
+    written = {"characters": 0, "scenes": 0, "episodeScenes": 0, "shots": 0}
+    old_images: list[str] = []
+    purged = {"done": False}
+
+    progress("script", "寫劇本（集／場／對白）…")
+    t = time.time()
+    episodes = [e for e in ((project.get("script") or {}).get("episodes") or []) if isinstance(e, dict)]
+    n_sc = max(1, min(int(opts["sceneCount"]), len(scns)))
+    use_scenes = scns[:n_sc]
+    ep_no = 1 if opts["overwrite"] else 1 + len(episodes)
+    script = gen_script(project, cfg, opts, chars, use_scenes, episode_no=ep_no)
+    warn_by["script"] = [f"本次用專案現有的 {len(chars)} 位角色、{n_sc} 個場景寫劇本（角色／場景卡不會被改動）"] \
+        + list(script["warnings"])
+    timings["script"] = round(time.time() - t, 1)
+    done_steps.append("script")
+    if opts["overwrite"] and not purged["done"]:
+        old = _purge_script_layer(project)
+        old_images = _media_paths(old)
+        purged["done"] = True
+    sp = dict(script["preview"])
+    ep_out, _id_map, _beat_map = _land_script(project, sp)
+    _save_now(slug, project)
+    written["episodeScenes"] = len(ep_out["scenes"])
+    media_deleted = _delete_media(slug, old_images) if old_images else 0
+    _set(job_id, written=dict(written), warnings=list(warn_by["script"]),
+         warningsByStep=dict(warn_by), timings=dict(timings))
+    return {"result": {**written, "episodes": 1, "mediaDeleted": media_deleted,
+                       "ids": {"characters": [], "scenes": [], "episodeId": ep_out["id"], "shots": []}},
+            "warnings": list(warn_by["script"]), "warningsByStep": warn_by, "timings": timings}
+
+
+def _run_shots_only(job_id: str, slug: str, cfg: dict, opts: dict, progress, done_steps: list) -> dict:
+    """範圍＝分鏡：只為**最後一集**的場次拆鏡頭（劇本、角色、場景都不動）。"""
+    project = storage.load_project(slug)
+    fps = int((project.get("meta") or {}).get("fps") or 24)
+    chars = [c for c in (project.get("characters") or []) if isinstance(c, dict)]
+    scns = [s for s in (project.get("scenes") or []) if isinstance(s, dict)]
+    episodes = [e for e in ((project.get("script") or {}).get("episodes") or []) if isinstance(e, dict)]
+    if not chars or not scns:
+        raise DeployError("角色或場景還是空的：請先在故事頁按「一鍵佈署到角色與場景」", step="shots")
+    if not episodes:
+        raise DeployError("還沒有劇本：請先在劇本頁按「一鍵佈署劇本」", step="shots")
+    ep_out = episodes[-1]
+    es_list = [es for es in (ep_out.get("scenes") or []) if isinstance(es, dict)]
+    if not es_list:
+        raise DeployError("最新這一集沒有場次：請先按「一鍵佈署劇本」", step="shots")
+
+    alloc, alloc_warns = allocate_shots(max(int(opts["shotCount"]), len(es_list)), len(es_list))
+    shot_warns = [f"分鏡對象：第 {len(episodes)} 集「{ep_out.get('title') or ''}」的 {len(es_list)} 場"] + alloc_warns
+    job_cfg = dict(cfg or {})
+    if job_cfg.get("provider"):
+        job_cfg["providerLabel"] = "線上" if job_cfg["provider"] == "online" else (
+            "自訂" if job_cfg["provider"] == "custom" else "本機")
+    try:
+        st = llm.status(cfg or {})
+        if st.get("ok") and st.get("model"):
+            job_cfg["model"] = st["model"]
+    except Exception:  # noqa: BLE001
+        pass
+    _set(job_id, params={**opts, "shotPlan": alloc,
+                         "provider": job_cfg.get("provider") or "",
+                         "providerLabel": job_cfg.get("providerLabel") or "",
+                         "model": job_cfg.get("model") or ""})
+
+    written = {"characters": 0, "scenes": 0, "episodeScenes": 0, "shots": 0}
+    created: list[str] = []
+    old_images: list[str] = []
+    purged = {"done": False}
+    warn_by = {"shots": shot_warns}
+    timings: dict[str, float] = {}
+    es_ids = {es["id"] for es in es_list}
+
+    t = time.time()
+    n_es = max(1, len(es_list))
+    for k, es in enumerate(es_list):
+        _check_cancel(job_id)
+        _set(job_id, step="shots", stepLabel=STEP_LABEL["shots"],
+             progress=round(0.02 + 0.96 * (k / n_es), 3),
+             message=f"拆分鏡…（{k + 1}/{n_es} 場）", elapsed=round(time.time() - t, 1))
+        beats = [b for b in (es.get("beats") or []) if isinstance(b, dict)]
+        per = alloc[k] if k < len(alloc) else 1
+        for w in shot_budget(beats, opts["shotSeconds"], per, fps)[1]:
+            shot_warns.append(f"{es['id']}：{w}")
+        res = gen_shots_for_scene(project, cfg, chars, scns, es, per, opts["shotSeconds"], fps, {})
+        shot_warns += [f"{es['id']}：{w}" for w in res["warnings"]]
+        shots_for_es = [{**sh, "episodeSceneId": es["id"], "sceneId": es.get("sceneId")}
+                        for sh in res["preview"]["shots"]]
+        if opts["overwrite"] and not purged["done"]:
+            old = _purge_shots_of_scenes(project, es_ids)
+            old_images = _media_paths(old)
+            purged["done"] = True
+        ids = _land_shots(project, ep_out, {"sourceChapterId": ep_out.get("sourceChapterId")},
+                          shots_for_es, {}, {})
+        _save_now(slug, project)
+        written["shots"] += len(ids)
+        created += ids
+        _set(job_id, written=dict(written), warnings=list(shot_warns),
+             warningsByStep=dict(warn_by), timings=dict(timings))
+    timings["shots"] = round(time.time() - t, 1)
+    media_deleted = _delete_media(slug, old_images) if old_images else 0
+    _set(job_id, written=dict(written), warnings=list(shot_warns),
+         warningsByStep=dict(warn_by), timings=dict(timings))
+    return {"result": {**written, "episodes": 0, "mediaDeleted": media_deleted,
+                       "ids": {"characters": [], "scenes": [], "episodeId": ep_out["id"], "shots": created}},
+            "warnings": list(shot_warns), "warningsByStep": warn_by, "timings": timings}
+
+
 def media_paths_of(old: dict) -> list[str]:
     return _media_paths(old)
 
@@ -1254,13 +1478,27 @@ def existing_counts(project: dict) -> dict:
     }
 
 
+def _check_prereq(project: dict, scope: str) -> None:
+    """依範圍檢查前置條件（缺什麼就給一句「先按哪一顆」的中文指示）。"""
+    story = project.get("story") or {}
+    has_story = bool(str(story.get("synopsis") or "").strip() or str(story.get("premise") or "").strip())
+    chars = [c for c in (project.get("characters") or []) if isinstance(c, dict)]
+    scns = [s for s in (project.get("scenes") or []) if isinstance(s, dict)]
+    eps = [e for e in ((project.get("script") or {}).get("episodes") or []) if isinstance(e, dict)]
+    if scope in ("all", "cast_locations") and not has_story:
+        raise DeployError("故事頁還是空的：請先寫故事概念或大綱，再按一鍵佈署", step="cast")
+    if scope in ("script", "shots") and (not chars or not scns):
+        raise DeployError("角色或場景還是空的：請先在故事頁按「一鍵佈署到角色與場景」",
+                          step="script" if scope == "script" else "shots")
+    if scope == "shots" and not eps:
+        raise DeployError("還沒有劇本：請先在劇本頁按「一鍵佈署劇本」", step="shots")
+
+
 def preview(slug: str, opts: dict | None = None) -> dict:
-    """同步跑四步但**完全不寫檔**（給「先預覽」用；前端要等 4 次模型，屬慢路徑）。"""
+    """同步跑指定範圍但**完全不寫檔**（給「先預覽」用；前端要等模型，屬慢路徑）。"""
     o = norm_opts(opts)
     project = storage.load_project(slug)
-    if not str((project.get("story") or {}).get("synopsis") or "").strip() and \
-            not str((project.get("story") or {}).get("premise") or "").strip():
-        raise DeployError("故事頁還是空的：請先寫故事概念或大綱，再按一鍵佈署", step="cast")
+    _check_prereq(project, o["scope"])
     cfg = storage.llm_settings(slug)
     pack = build_preview_with_progress(project, cfg, o, lambda step, msg: None, [], "", 0.0)
     return {"preview": pack["preview"], "warnings": pack["warnings"],
@@ -1294,12 +1532,10 @@ def latest_job(slug: str) -> dict | None:
 
 
 def start(slug: str, opts: dict | None = None) -> dict:
-    """建任務並在背景 thread 跑四步；立刻回 job 狀態（前端 poll）。"""
+    """建任務並在背景 thread 跑「這個範圍」的步驟；立刻回 job 狀態（前端 poll）。"""
     o = norm_opts(opts)
     project = storage.load_project(slug)
-    if not str((project.get("story") or {}).get("synopsis") or "").strip() and \
-            not str((project.get("story") or {}).get("premise") or "").strip():
-        raise DeployError("故事頁還是空的：請先寫故事概念或大綱，再按一鍵佈署", step="cast")
+    _check_prereq(project, o["scope"])
     blockers = _image_blockers(slug, project) if o["overwrite"] else []
     if blockers:
         raise DeployError("；".join(blockers), step="cast")
@@ -1364,12 +1600,13 @@ def _run(job_id: str) -> None:
         job = _JOBS[job_id]
         slug, opts = job["slug"], job["params"]
     t0 = time.time()
-    _set(job_id, status="running", startedAt=storage.now_iso(), step="cast", stepLabel=STEP_LABEL["cast"],
-         progress=0.02)
+    steps = SCOPES.get(str(opts.get("scope") or "all"), STEPS)
+    _set(job_id, status="running", startedAt=storage.now_iso(), step=steps[0],
+         stepLabel=STEP_LABEL[steps[0]], progress=0.02)
     done_steps: list[str] = []
 
     def progress(step: str, msg: str) -> None:
-        base = len(done_steps) / 4.0
+        base = len(done_steps) / float(max(1, len(steps)))
         _set(job_id, step=step, stepLabel=STEP_LABEL.get(step, step), progress=round(base + 0.02, 3),
              message=msg, elapsed=round(time.time() - t0, 1))
 

@@ -333,20 +333,19 @@ function renderStory() {
 
   box.append(el("h2", { class: "view-title", text: "1 · 故事" }));
 
-  // 一鍵佈署：故事寫好後，一次建出角色／場景／劇本／鏡頭（只建文字，圖片留空）
+  // 一鍵佈署（角色與場景）：故事寫好後先建人物卡與場景卡（只建文字，圖片留空）
   const dpCard = el("div", { class: "card deploy-card" },
     el("div", { class: "card-head" },
-      el("h3", { text: "🚀 一鍵佈署到各頁面" }),
+      el("h3", { text: "🚀 一鍵佈署到角色與場景" }),
       el("span", { class: "spacer" }),
       el("button", {
         class: "btn btn-primary", type: "button",
-        title: "用大綱自動建出角色卡、場景卡、劇本（集／場／對白）與分鏡（六段式 prompt）；圖片一律留空等你補",
-        onclick: () => openDeployModal(),
-      }, "🚀 一鍵佈署到各頁面"),
+        onclick: () => openDeployModal("cast_locations"),
+      }, "🚀 一鍵佈署到角色與場景"),
     ),
     el("p", { class: "hint", text:
-      "把這個故事一次佈署成：角色卡 → 場景卡 → 劇本（集／場／對白）→ 分鏡（每鏡六段式 prompt）。"
-      + "只建文字，所有圖片欄位保持空白（之後到各頁上傳或按生成）。約需 2–5 分鐘。" }),
+      "用這個故事一次建出「2 人物」的角色卡與「3 場景」的場景卡（含外型、辨識錨點、場景描述）。"
+      + "只建文字，圖片欄位保持空白。約 1–2 分鐘。劇本與分鏡請到各自的頁面按「一鍵佈署」。" }),
   );
   box.append(dpCard);
 
@@ -2006,6 +2005,22 @@ function renderScript() {
   const eps = episodes();
   box.append(el("h2", { class: "view-title", text: "4 · 劇本" }));
   box.append(el("p", { class: "hint", text: "集 → 場次 → 節拍（beat）。場次對映「3 場景」的場景卡，人物勾選來自「2 人物」的人物卡；所有下拉都即時從專案資料生成，不寫死。" }));
+
+  // 一鍵佈署（劇本）：用「2 人物」與「3 場景」現有的卡片寫一集，角色／場景卡不動
+  const dpScriptCard = el("div", { class: "card deploy-card" },
+    el("div", { class: "card-head" },
+      el("h3", { text: "🚀 一鍵佈署劇本" }),
+      el("span", { class: "spacer" }),
+      el("button", {
+        class: "btn btn-primary", type: "button",
+        onclick: () => openDeployModal("script"),
+      }, "🚀 一鍵佈署劇本"),
+    ),
+    el("p", { class: "hint", text:
+      "用現有的角色卡與場景卡寫「一集」（集名、場次、對白＋動作 beats）。"
+      + "角色與場景卡不會被改動；分鏡請到「5 鏡頭」按「一鍵佈署分鏡」。" }),
+  );
+  box.append(dpScriptCard);
 
   const card = el("div", { class: "card" });
   card.append(el("div", { class: "card-head" },
@@ -3705,6 +3720,22 @@ function renderShots() {
 
   box.append(el("h2", { class: "view-title", text: "5 · 鏡頭" }));
   box.append(el("p", { class: "hint", text: `分鏡表 · ${list.length} 個鏡頭。可用場次篩選；「🎬 由劇本自動分鏡」依劇本 beats 一鍵產生分鏡（純規則，不呼叫模型）。` }));
+
+  // 一鍵佈署（分鏡）：用模型為「最新一集」的場次拆鏡頭（劇本、角色、場景都不動）
+  const dpShotsCard = el("div", { class: "card deploy-card" },
+    el("div", { class: "card-head" },
+      el("h3", { text: "🚀 一鍵佈署分鏡" }),
+      el("span", { class: "spacer" }),
+      el("button", {
+        class: "btn btn-primary", type: "button",
+        onclick: () => openDeployModal("shots"),
+      }, "🚀 一鍵佈署分鏡"),
+    ),
+    el("p", { class: "hint", text:
+      "用最新一集的場次與 beats，逐場請模型拆鏡頭（中文描述＋六段式英文 prompt，台詞引用自動對到 beat）。"
+      + "劇本、角色卡、場景卡都不會被改動。約每場 25–60 秒。" }),
+  );
+  box.append(dpShotsCard);
 
   // 工具列
   const filterSel = el("select", { class: "inline-select" },
@@ -7083,7 +7114,7 @@ document.addEventListener("keydown", (e) => {
 // 一鍵佈署：故事 → 角色／場景／劇本／鏡頭（只建文字，圖片全空）
 // 流程：彈窗填參數 → POST /deploy 建背景 job → 每 2 秒 poll → 完成摘要
 // ══════════════════════════════════════════════════════════
-const dpState = { jobId: null, timer: null, pending: false, confirming: false, existing: null, latest: null };
+const dpState = { jobId: null, timer: null, pending: false, confirming: false, existing: null, latest: null, scope: "cast_locations" };
 
 const DP_STEPS = [
   ["cast", "角色卡"], ["locations", "場景卡"], ["script", "劇本"], ["shots", "分鏡"],
@@ -7091,11 +7122,59 @@ const DP_STEPS = [
 const DP_STEP_LABEL = { cast: "角色卡", locations: "場景卡", script: "劇本", shots: "分鏡",
   write: "寫入專案", done: "完成", failed: "失敗", queued: "排隊中" };
 
+// 三個「一鍵佈署」按鈕共用同一個彈窗，用 scope 決定標題、參數欄位與要跑的步驟（後端 app/deploy.py SCOPES 對應）
+const DP_SCOPE = {
+  cast_locations: {
+    title: "🚀 一鍵佈署到角色與場景",
+    steps: ["cast", "locations"],
+    show: { characters: true, scenes: true, shots: false, seconds: false },
+    overwrite: "覆蓋現有內容（清空角色／場景／劇本／鏡頭重建）",
+    purge: "角色／場景／劇本／鏡頭會全部清空重建",
+    needStory: true,
+  },
+  all: {
+    title: "🚀 一鍵佈署到各頁面（全部）",
+    steps: ["cast", "locations", "script", "shots"],
+    show: { characters: true, scenes: true, shots: true, seconds: true },
+    overwrite: "覆蓋現有內容（清空角色／場景／劇本／鏡頭重建）",
+    purge: "角色／場景／劇本／鏡頭會全部清空重建",
+    needStory: true,
+  },
+  script: {
+    title: "🚀 一鍵佈署劇本",
+    steps: ["script"],
+    show: { characters: false, scenes: true, shots: true, seconds: true },
+    overwrite: "覆蓋現有劇本（清空所有集與鏡頭；角色／場景保留）",
+    purge: "所有集劇本與鏡頭會清空重建（角色／場景卡保留）",
+    needStory: false,
+  },
+  shots: {
+    title: "🚀 一鍵佈署分鏡",
+    steps: ["shots"],
+    show: { characters: false, scenes: false, shots: true, seconds: true },
+    overwrite: "覆蓋現有分鏡（清空最新一集的鏡頭；其他資料保留）",
+    purge: "最新一集的鏡頭會清空重建（劇本、角色、場景保留）",
+    needStory: false,
+  },
+};
+
+function dpScopeCfg() {
+  return DP_SCOPE[dpState.scope] || DP_SCOPE.cast_locations;
+}
+
+function dpApplyScope(scope) {
+  dpState.scope = DP_SCOPE[scope] ? scope : "cast_locations";
+  const box = $("#modal-deploy");
+  if (!box) return;
+  const h = box.querySelector(".dp-title");
+  if (h) h.textContent = dpScopeCfg().title;
+}
+
 function ensureDeployModal() {
   if ($("#modal-deploy")) return;
   const box = el("div", { id: "modal-deploy", class: "modal hidden" });
   box.append(el("div", { class: "modal-box dp-box" },
-    el("h3", { text: "🚀 一鍵佈署到各頁面" }),
+    el("h3", { class: "dp-title", text: "🚀 一鍵佈署" }),
     el("p", { class: "hint dp-llm", text: "" }),
     el("p", { class: "hint dp-hint", text: "" }),
     el("div", { class: "row wrap dp-params" }),
@@ -7138,11 +7217,13 @@ function closeDeployModal() {
   if (box) box.classList.add("hidden");
 }
 
-async function openDeployModal() {
+async function openDeployModal(scope = "cast_locations") {
   if (!state.slug) { alert("請先選一個專案。"); return; }
   // 先把還沒存的編輯寫回，否則佈署會用舊大綱
   if (state.dirty) await saveNow();
   ensureDeployModal();
+  dpApplyScope(scope);
+  const cfg = dpScopeCfg();
   const box = $("#modal-deploy");
   box.querySelector(".dp-progress").classList.add("hidden");
   box.querySelector(".dp-summary").classList.add("hidden");
@@ -7150,15 +7231,21 @@ async function openDeployModal() {
   box.querySelector(".dp-warn").classList.add("hidden");
   const params = box.querySelector(".dp-params");
   params.textContent = "";
+  // 只顯示這個範圍真的會用到的參數（劇本只吃場次數／總鏡數／每鏡秒數，分鏡只吃後兩者）
   const c = genNumInput("角色數", 3, 1, 8);
   const s = genNumInput("場景數", 2, 1, 8);
   const n = genNumInput("總鏡數（自動分配到各場）", 6, 1, 24);
   const sec = genNumInput("每鏡秒數", 5, 3, 15, 0.5);
+  if (cfg.show.characters) params.append(c.node);
+  if (cfg.show.scenes) params.append(s.node);
+  if (cfg.show.shots) params.append(n.node);
+  if (cfg.show.seconds) params.append(sec.node);
   const owBox = el("input", { type: "checkbox" });
   owBox.checked = true;   // 預設覆蓋：append 會累積重複主題（送單前還會二次確認）
-  const owLabel = el("label", { class: "field dp-check" }, owBox, el("span", { text: "覆蓋現有內容（清空角色／場景／劇本／鏡頭重建）" }));
-  params.append(c.node, s.node, n.node, sec.node, owLabel);
+  const owLabel = el("label", { class: "field dp-check" }, owBox, el("span", { text: cfg.overwrite }));
+  params.append(owLabel);
   dpState.readParams = () => ({
+    scope: dpState.scope,
     characterCount: Number(c.input.value) || 3,
     sceneCount: Number(s.input.value) || 2,
     shotCount: Number(n.input.value) || 6,
@@ -7185,22 +7272,43 @@ async function openDeployModal() {
     if (ex.scenes) bits.push(`${ex.scenes} 場景`);
     if (ex.episodes) bits.push(`${ex.episodes} 集劇本`);
     if (ex.shots) bits.push(`${ex.shots} 鏡`);
-    box.querySelector(".dp-hint").textContent = info.hasStory
-      ? `會用這一頁的故事概念與大綱當骨幹（目前：${String(info.storyHint || "").slice(0, 60)}…）`
-      : "故事頁還是空的：請先寫故事概念或大綱。";
+    const hintEl = box.querySelector(".dp-hint");
+    const runBtn = box.querySelector(".dp-run");
+    let blocked = "";
+    if (dpState.scope === "cast_locations" || dpState.scope === "all") {
+      hintEl.textContent = info.hasStory
+        ? `會用這一頁的故事概念與大綱當骨幹（目前：${String(info.storyHint || "").slice(0, 60)}…）`
+        : "故事頁還是空的：請先寫故事概念或大綱。";
+      if (!info.hasStory) blocked = "故事頁還是空的";
+    } else if (dpState.scope === "script") {
+      const ok = (ex.characters || 0) > 0 && (ex.scenes || 0) > 0;
+      hintEl.textContent = ok
+        ? `會用目前的人物卡（${ex.characters} 位）與場景卡（${ex.scenes} 個）寫一集；這些卡片不會被改動。`
+        : "角色或場景還是空的：請先在故事頁按「一鍵佈署到角色與場景」。";
+      if (!ok) blocked = "缺角色或場景";
+    } else if (dpState.scope === "shots") {
+      const ok = (ex.episodes || 0) > 0 && (ex.characters || 0) > 0 && (ex.scenes || 0) > 0;
+      hintEl.textContent = ok
+        ? `會為最新一集（目前共 ${ex.episodes} 集）的場次拆鏡頭；劇本、角色、場景都不會改動。`
+        : "還沒有劇本（或角色／場景是空的）：請先按「一鍵佈署劇本」。";
+      if (!ok) blocked = "缺劇本或角色／場景";
+    }
     if (bits.length) {
-      // 已勾覆蓋 → 預設講「會清空」；取消勾選時講「會接續新增、主題可能重複」
+      // 已勾覆蓋 → 講「會清空什麼」；取消勾選 → 講「接續新增」
       const countLine = `目前已有 ${bits.join(" / ")}。`;
       const updateWarn = () => {
         warn.textContent = owBox.checked
-          ? `⚠ ${countLine}已勾「覆蓋現有內容」：角色／場景／劇本／鏡頭會全部清空重建（舊媒體檔一併移出，不可復原）。`
-          : `⚠ ${countLine}不勾「覆蓋現有內容」時會接續新增（角色／場景續編號、劇本多一集），主題可能與舊內容重複；重複佈署會一直累積。`;
+          ? `⚠ ${countLine}已勾「覆蓋現有內容」：${cfg.purge}（舊媒體檔一併移出，不可復原）。`
+          : `⚠ ${countLine}不勾「覆蓋現有內容」時會接續新增（編號往後接、劇本多一集、鏡頭續加），重複佈署會一直累積。`;
         warn.classList.remove("hidden");
       };
       owBox.addEventListener("change", updateWarn);
       updateWarn();
     }
-    if (!info.hasStory) box.querySelector(".dp-run").disabled = true;
+    if (blocked) {
+      runBtn.disabled = true;
+      runBtn.textContent = `無法佈署：${blocked}`;
+    }
   } catch (e) {
     dpRenderLlmLine(null);
     box.querySelector(".dp-hint").textContent = `讀取專案現況失敗：${e.message}`;
@@ -7215,10 +7323,12 @@ function dpRenderProgress(job) {
   const cur = job.step || "queued";
   const order = ["cast", "locations", "script", "shots", "write", "done"];
   const curIdx = order.indexOf(cur);
-  DP_STEPS.forEach(([key, label], i) => {
+  const steps = dpScopeCfg().steps.map((k) => [k, DP_STEP_LABEL[k]]);
+  const at = steps.findIndex(([k]) => k === cur);   // 以「本次範圍內的順序」判斷誰已完成
+  steps.forEach(([key, label], i) => {
     let cls = "dp-step";
     if (job.status === "failed" && job.failedStep === key) cls += " dp-failed";
-    else if (curIdx > i || job.status === "done") cls += " dp-ok";
+    else if (job.status === "done" || (at >= 0 && i < at)) cls += " dp-ok";
     else if (cur === key) cls += " dp-doing";
     const t = (job.timings || {})[key];
     wrap.append(el("div", { class: cls },
@@ -7248,15 +7358,17 @@ async function submitDeploy() {
     if (dpState.confirming) return;   // 連按兩下不要開出兩個確認框
     dpState.confirming = true;
     const ex = dpState.existing || {};
+    const cfg = dpScopeCfg();
     const has = (ex.characters || 0) + (ex.scenes || 0) + (ex.episodes || 0) + (ex.shots || 0) > 0;
     const ok = await (window.SVSConfirm
       ? SVSConfirm({ title: "覆蓋現有內容？（會先清空再重建）", plain: true, okText: "清空並重建", refs: [
-        has ? `會永久清空：${ex.characters || 0} 角色、${ex.scenes || 0} 場景、${ex.episodes || 0} 集劇本、${ex.shots || 0} 個鏡頭`
+        has ? `目前已有：${ex.characters || 0} 角色、${ex.scenes || 0} 場景、${ex.episodes || 0} 集劇本、${ex.shots || 0} 個鏡頭`
           : "目前沒有舊內容，覆蓋等同直接建立",
-        "角色／場景的參考圖、鏡頭的首尾幀與影片檔案也會一併移出（不可復原）",
+        `${cfg.title.replace("🚀 ", "")}　會清空：${cfg.purge}`,
+        "被清掉的參考圖、首尾幀與影片檔案也會一併移出（不可復原）",
         "不想清空的話按「取消」，再取消勾選「覆蓋現有內容」改成接續新增",
       ] })
-      : Promise.resolve(confirm("會清空角色／場景／劇本／鏡頭（含已生成的圖片與影片）後重建，確定嗎？")));
+      : Promise.resolve(confirm(`${cfg.purge}（含已生成的圖片與影片），確定嗎？`)));
     dpState.confirming = false;
     if (!ok) return;   // 取消：留在參數視窗，讓使用者改設定再送
   }
@@ -7339,17 +7451,28 @@ async function pollDeploy(jobId) {
 function dpShowSummary(job) {
   const box = $("#modal-deploy");
   const r = job.result || {};
+  const cfg = dpScopeCfg();
   const wrap = box.querySelector(".dp-summary");
   wrap.classList.remove("hidden");
   wrap.textContent = "";
-  wrap.append(el("h4", { text: "✓ 佈署完成" }));
+  wrap.append(el("h4", { text: `✓ 佈署完成（${cfg.title.replace("🚀 ", "")}）` }));
+  const bits = [];
+  if (r.characters) bits.push(`${r.characters} 位角色`);
+  if (r.scenes) bits.push(`${r.scenes} 個場景`);
+  if (r.episodes) bits.push(`${r.episodes} 集劇本`);
+  if (r.shots) bits.push(`${r.shots} 個鏡頭`);
   wrap.append(el("p", { text:
-    `已建立 ${r.characters || 0} 位角色、${r.scenes || 0} 個場景、${r.episodes || 0} 集劇本、${r.shots || 0} 個鏡頭（圖片全部待補）` }));
-  wrap.append(el("p", { class: "hint", text:
-    "角色卡／場景卡／鏡頭的圖片欄位都是空的：可以到各頁上傳自己的圖，或按生成讓模型產圖。"
-    + (r.mediaDeleted ? `（舊圖已移出 ${r.mediaDeleted} 個檔案）` : "") }));
+    bits.length ? `已建立 ${bits.join("、")}（圖片全部待補）` : "這一輪沒有寫入任何資料。" }));
+  const nextHint = {
+    cast_locations: "角色與場景卡好了：接著到「4 劇本」按「一鍵佈署劇本」，再到「5 鏡頭」按「一鍵佈署分鏡」。",
+    all: "角色卡／場景卡／劇本的圖片、鏡頭的首尾幀都是空的：可以到各頁上傳自己的圖，或按生成讓模型產圖。",
+    script: "劇本好了：接著到「5 鏡頭」按「一鍵佈署分鏡」把這一集拆成鏡頭。",
+    shots: "鏡頭好了：接著到「6 生成與合併」生圖、生影片，最後合併成片。",
+  }[dpState.scope] || "";
+  wrap.append(el("p", { class: "hint", text: nextHint
+    + (r.mediaDeleted ? `（舊檔已移出 ${r.mediaDeleted} 個）` : "") }));
   const t = job.timings || {};
-  const timeBits = DP_STEPS.map(([k, l]) => `${l} ${t[k] != null ? t[k] + "s" : "—"}`).join("　");
+  const timeBits = cfg.steps.map((k) => `${DP_STEP_LABEL[k]} ${t[k] != null ? t[k] + "s" : "—"}`).join("　");
   const plan = (job.params && job.params.shotPlan) || [];
   wrap.append(el("p", { class: "hint", text: `各步耗時：${timeBits}　總計 ${job.elapsed != null ? job.elapsed + "s" : "—"}`
     + (plan.length ? `　（總鏡數分配到各場：${plan.join(" / ")} 鏡）` : "") }));
@@ -7383,6 +7506,7 @@ async function reattachDeployJob() {
     if (["queued", "running"].includes(j.status)) {
       dpState.jobId = j.jobId;
       ensureDeployModal();
+      dpApplyScope((j.params && j.params.scope) || "all");
       $("#modal-deploy").classList.remove("hidden");
       dpState.pending = true;
       $("#modal-deploy").querySelector(".dp-run").disabled = true;

@@ -8,6 +8,22 @@
 
 （尚無未發佈變更）
 
+## [0.9.16] - 2026-11-23
+
+### 一鍵佈署拆成三個範圍（故事頁縮範圍，劇本／鏡頭各一顆）
+
+**為什麼**：使用者指出「一鍵佈署範圍太大要拆開」——一次跑四層要 2–5 分鐘，中途失敗很難判斷是哪一層；而且故事頁那顆按鈕實際做了劇本與分鏡，跟「故事寫完只想先有角色與場景」的直覺不符。
+
+- **故事頁**：按鈕改名「🚀 一鍵佈署到角色與場景」，只跑 `cast`＋`locations`（約 46 秒實測），劇本與分鏡留給各自的頁面。
+- **劇本頁**：新增「🚀 一鍵佈署劇本」卡（`scope=script`）——用**專案現有的**角色卡／場景卡寫一集，這些卡片不動（實測 15 秒）。
+- **鏡頭頁**：新增「🚀 一鍵佈署分鏡」卡（`scope=shots`）——只為**最新一集**的場次拆鏡頭，劇本／角色／場景都不動（實測 2 場 67 秒）。
+- 後端：`deploy.SCOPES`／`SCOPE_LABEL`／`norm_opts` 的 `scope`；新 `_run_cast_locations`／`_run_script_only`／`_run_shots_only`；`_check_prereq()` 依範圍給「先按哪一顆」的中文指示；清理改成按範圍（`_purge_script_layer` 只清劇本＋鏡頭、`_purge_shots_of_scenes` 只清該集場次的鏡頭）。`run_steps_landing()` 對 `scope=all` 走原本四步流程，其餘在前面分派——舊行為完全保留。
+- 舊呼叫端（不帶 `scope` 的 `POST /deploy`）＝`all`，向後相容。
+- 前端：`DP_SCOPE` 決定彈窗標題、要顯示哪些參數、覆蓋說明的文字與進度清單；`reattachDeployJob()` 從 job 的 `params.scope` 還原範圍。三個按鈕都**沒有** `title` 提示。
+- 驗證：`scripts/check_deploy_scopes.py`（離線、假模型；斷言三個範圍只動自己那層＋前置條件會擋），另有線上實跑 46.5s／15.0s／67.4s 三段。
+- 影響半徑：`app/deploy.py`（新增範圍函式、`start/preview` 前置檢查）、`app/server.py`（`DeployBody.scope` 與 opts 傳遞）、`app/agentdoc.py`（route note）、`static/app.js`（三張卡＋彈窗）。各分頁原有卡片、生成／合併、對話抽屜皆未動。
+
+
 ## [0.9.15] - 2026-11-23
 
 ### UI：專案下拉改自製面板，每列右側恢復「✕ 刪除」並新增「✎ 編輯名稱」
