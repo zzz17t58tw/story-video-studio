@@ -340,8 +340,9 @@ function renderStory() {
       el("span", { class: "spacer" }),
       el("button", {
         class: "btn btn-primary", type: "button",
+        "aria-label": "一鍵佈署角色與場景",
         onclick: () => openDeployModal("cast_locations"),
-      }, "🚀 一鍵佈署到角色與場景"),
+      }, "開始佈署"),
     ),
     el("p", { class: "hint", text:
       "用這個故事一次建出「2 人物」的角色卡與「3 場景」的場景卡（含外型、辨識錨點、場景描述）。"
@@ -2013,8 +2014,9 @@ function renderScript() {
       el("span", { class: "spacer" }),
       el("button", {
         class: "btn btn-primary", type: "button",
+        "aria-label": "一鍵佈署劇本",
         onclick: () => openDeployModal("script"),
-      }, "🚀 一鍵佈署劇本"),
+      }, "開始佈署"),
     ),
     el("p", { class: "hint", text:
       "用現有的角色卡與場景卡寫「一集」（集名、場次、對白＋動作 beats）。"
@@ -3743,8 +3745,9 @@ function renderShots() {
       el("span", { class: "spacer" }),
       el("button", {
         class: "btn btn-primary", type: "button",
+        "aria-label": "一鍵佈署分鏡",
         onclick: () => openDeployModal("shots"),
-      }, "🚀 一鍵佈署分鏡"),
+      }, "開始佈署"),
     ),
     el("p", { class: "hint", text:
       "用最新一集的場次與 beats，逐場請模型拆鏡頭（中文描述＋六段式英文 prompt，台詞引用自動對到 beat）。"
