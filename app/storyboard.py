@@ -85,11 +85,6 @@ def build_reference_plan_cb(project: dict, es: dict, shots: list[dict]) -> None:
 
 
 # ── 長度：估時 → 吸附 → padSec／拆鏡 ─────────────────────────────
-def beat_seconds(beats: list[dict]) -> float:
-    """一組 beats 的估時（秒）。直接重用 storygen 的算式，不另立一套。"""
-    return _estimate_group(beats)
-
-
 def legal_frames(sec: float, fps: int = FPS_DEFAULT) -> dict:
     """估時 → 合法格；k 夾在 124–362 對應的範圍（7..21）。"""
     fr = h3compose.frames_for(sec, fps)

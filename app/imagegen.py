@@ -236,11 +236,6 @@ def find_shot(project: dict, shot_id: str) -> dict | None:
 
 
 # ── 1. 收集參考圖（referencePlan → 最多 2 張）─────────────────────
-def _local_media_path(project: dict, rel: str) -> Path:
-    slug = project.get("meta", {}).get("slug") or ""
-    return storage.project_dir(slug) / rel
-
-
 def _char_face_ref(project: dict, cid: str) -> dict | None:
     ch = next((c for c in (project.get("characters") or []) if isinstance(c, dict) and c.get("id") == cid), None)
     if not ch:
@@ -2342,13 +2337,6 @@ def latest_batch(slug: str) -> dict | None:
             return None
         job = max(cands, key=lambda j: (j.get("createdAt") or "", j.get("jobId") or ""))
         return copy.deepcopy(_batch_public(job))
-
-
-def _same_project_mtime(slug: str) -> float:
-    try:
-        return storage.project_file(slug).stat().st_mtime
-    except OSError:
-        return 0.0
 
 
 def _run_batch(job_id: str) -> None:

@@ -208,28 +208,6 @@ def episode_scene_map(data: dict) -> dict[str, dict]:
     return out
 
 
-def shot_dialog_beat_ids(shot: dict, data: dict) -> list[str]:
-    """**唯讀換算**：鏡頭 → 台詞 beat id（不寫回）。
-
-    優先用 dialogBeatIds；沒有才退回舊的 dialogLineRefs（場次內第 N 句台詞）。
-    回傳順序照場次劇本順序（引用順序＝台詞演出順序，前端唯讀區與音訊段都用它）。
-    """
-    es_id = shot.get("episodeSceneId")
-    dlg = (episode_scene_map(data).get(es_id) or {}).get("dialogue") or []
-    by_index = {i + 1: str(b.get("id")) for i, b in enumerate(dlg)}
-    ids = [x for x in (shot.get("dialogBeatIds") or []) if isinstance(x, str)]
-    refs = [r for r in (shot.get("dialogLineRefs") or []) if isinstance(r, int) and not isinstance(r, bool)]
-    want = set(ids) | {by_index[n] for n in refs if n in by_index}
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for b in dlg:
-        bid = str(b.get("id"))
-        if bid in want and bid not in seen:
-            seen.add(bid)
-            ordered.append(bid)
-    return ordered
-
-
 def dialog_beat_index(beat_ids: list[str], dialogue: list[dict]) -> list[int]:
     """beat id 清單 → 該場次台詞的 1-based 序號（舊 dialogLineRefs 的寫法）。"""
     pos = {str(b.get("id")): i + 1 for i, b in enumerate(dialogue or [])}
@@ -1137,18 +1115,6 @@ def run_for_beat(data: dict, beat_id: str) -> dict | None:
                 if isinstance(beat, dict) and beat.get("id") == beat_id:
                     return {"episodeSceneId": es.get("id"), "episodeId": ep.get("id")}
     return None
-
-
-def get_path(obj: dict, path: str):
-    """取值；不存在回 None。"""
-    cur = obj
-    for part in (path or "").split("."):
-        if not part:
-            continue
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
 
 
 def set_path(obj: dict, path: str, value, mode: str = "replace") -> tuple[object, object]:
