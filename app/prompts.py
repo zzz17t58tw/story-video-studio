@@ -292,6 +292,3 @@ def build_system(project: dict, kind: str | None, target: dict | None, task: str
     return "\n".join(parts)
 
 
-def task_rules() -> dict:
-    """給前端/文件參考：任務代號 → 規則首行。"""
-    return {k: v.strip().splitlines()[0] for k, v in _TASK_RULES.items()}

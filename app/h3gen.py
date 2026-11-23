@@ -295,10 +295,6 @@ def check_lora_stack(rows: list[dict]) -> list[str]:
     return out
 
 
-def _used_pictures(prompt: str) -> list[int]:
-    return sorted({int(m.group(1)) for m in _PIC_RE.finditer(prompt)})
-
-
 def _sendable_ordinals(refs: list[dict], notes: dict) -> list[int]:
     """這次送件時「<Picture N> 的 N 可以是哪些值」——這個集合必須跟下方的改編號邏輯一致。
 
