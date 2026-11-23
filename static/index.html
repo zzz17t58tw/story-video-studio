@@ -22,7 +22,13 @@
       </div>
       <div class="project-bar">
         <button id="btn-new-project" class="btn btn-small" type="button">＋ 新專案</button>
-        <select id="project-select" class="project-select" aria-label="切換專案"></select>
+        <div class="project-picker" id="project-picker">
+          <button id="project-picker-btn" class="project-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span id="project-picker-label" class="pp-label">請選擇專案</span>
+            <span class="pp-caret">▾</span>
+          </button>
+          <div id="project-picker-menu" class="project-picker-menu hidden" role="listbox"></div>
+        </div>
       </div>
       <p id="project-empty" class="hint hidden">尚無專案，按「＋ 新專案」開始。</p>
     </section>
@@ -94,6 +100,22 @@
     <div class="modal-actions">
       <button id="new-cancel" class="btn" type="button">取消</button>
       <button id="new-create" class="btn btn-primary" type="button">建立</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 編輯專案名稱彈窗 ───────────────────────────────── -->
+<div id="modal-rename" class="modal hidden">
+  <div class="modal-box">
+    <h3>編輯專案名稱</h3>
+    <label class="field">
+      <span>專案名稱（可中文）</span>
+      <input id="rename-name" type="text" autocomplete="off">
+    </label>
+    <p id="rename-error" class="error hidden"></p>
+    <div class="modal-actions">
+      <button id="rename-cancel" class="btn" type="button">取消</button>
+      <button id="rename-ok" class="btn btn-primary" type="button">儲存</button>
     </div>
   </div>
 </div>

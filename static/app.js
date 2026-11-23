@@ -120,41 +120,123 @@ async function loadProjectList() {
 }
 
 function renderProjectList() {
-  const sel = $("#project-select");
+  const label = $("#project-picker-label");
+  const menu = $("#project-picker-menu");
+  const btn = $("#project-picker-btn");
   const empty = $("#project-empty");
-  if (!sel) return;                      // init 期間 DOM 還沒好時直接跳過
+  if (!btn || !menu || !label) return;     // init 期間 DOM 還沒好時直接跳過
   const has = state.projects.length > 0;
   if (empty) empty.classList.toggle("hidden", has);
-  sel.textContent = "";
-  if (!has) {
-    sel.append(el("option", { value: "", text: "（尚無專案）" }));
-    sel.disabled = true;
-    return;
-  }
-  sel.disabled = false;
-  if (!state.slug) sel.append(el("option", { value: "", text: "請選擇專案…" }));
+  const cur = state.projects.find((p) => p.slug === state.slug);
+  label.textContent = cur ? cur.name : (has ? "請選擇專案…" : "（尚無專案）");
+  btn.disabled = !has;
+  menu.textContent = "";
   for (const p of state.projects) {
-    sel.append(el("option", {
-      value: p.slug,
-      text: `${p.name}（${p.shotCount} 鏡）`,
-    }));
+    const row = el("div", { class: "pp-row" + (p.slug === state.slug ? " active" : "") });
+    row.append(
+      el("button", {
+        class: "pp-open", type: "button",
+        onclick: () => { closeProjectPicker(); if (p.slug !== state.slug) openProject(p.slug); },
+      },
+        el("span", { class: "pp-name", text: p.name }),
+        el("span", { class: "pp-meta", text: `${p.shotCount} 鏡` }),
+      ),
+      // 改名：在專案名稱右側的「✎」；不加 title 提示框，避免滑過時閃黑框
+      el("button", {
+        class: "pp-act", type: "button", "aria-label": "編輯專案名稱",
+        onclick: (ev) => { ev.stopPropagation(); closeProjectPicker(); renameProject(p); },
+      }, "✎"),
+      el("button", {
+        class: "pp-act pp-del", type: "button", "aria-label": "刪除專案（移到 _trash）",
+        onclick: (ev) => { ev.stopPropagation(); closeProjectPicker(); deleteProject(p.slug, p.name); },
+      }, "✕"),
+    );
+    menu.append(row);
   }
-  // 刪除收進同一個下拉（維持側欄只有兩格）；選到時會先跳確認框，取消就把選項還原。
-  if (state.slug) sel.append(el("option", { value: "__delete__", text: "－ 刪除目前專案（移到 _trash）－" }));
-  sel.value = state.slug || "";
 }
 
-async function onProjectSelectChange(sel) {
-  const v = sel.value;
-  if (v === "__delete__") {
-    sel.value = state.slug || "";
-    const p = state.projects.find((x) => x.slug === state.slug);
-    if (p) await deleteProject(p.slug, p.name);
-    sel.value = state.slug || "";
+function openProjectPicker() {
+  const menu = $("#project-picker-menu");
+  const btn = $("#project-picker-btn");
+  if (!menu || !btn || btn.disabled) return;
+  menu.classList.remove("hidden");
+  btn.setAttribute("aria-expanded", "true");
+}
+
+function closeProjectPicker() {
+  const menu = $("#project-picker-menu");
+  const btn = $("#project-picker-btn");
+  if (menu) menu.classList.add("hidden");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
+function toggleProjectPicker() {
+  const menu = $("#project-picker-menu");
+  if (!menu) return;
+  if (menu.classList.contains("hidden")) openProjectPicker(); else closeProjectPicker();
+}
+
+// 編輯專案名稱：只改 meta.name（資料夾 slug 不動），沿用既有的 PUT /api/projects/{slug}
+function openRenameModal(currentName) {
+  return new Promise((resolve) => {
+    const modal = $("#modal-rename");
+    const input = $("#rename-name");
+    const err = $("#rename-error");
+    if (!modal || !input) { resolve(window.prompt("新的專案名稱：", currentName)); return; }
+    input.value = currentName || "";
+    err.classList.add("hidden");
+    modal.classList.remove("hidden");
+    input.focus();
+    input.select();
+    const done = (val) => {
+      modal.classList.add("hidden");
+      input.removeEventListener("keydown", onKey);
+      $("#rename-ok").onclick = null;
+      $("#rename-cancel").onclick = null;
+      modal.onclick = null;
+      resolve(val);
+    };
+    const submit = () => {
+      const v = input.value.trim();
+      if (!v) { err.textContent = "名稱不能空白。"; err.classList.remove("hidden"); return; }
+      done(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+      else if (e.key === "Escape") { e.preventDefault(); done(null); }
+    };
+    input.addEventListener("keydown", onKey);
+    $("#rename-ok").onclick = submit;
+    $("#rename-cancel").onclick = () => done(null);
+    modal.onclick = (e) => { if (e.target.id === "modal-rename") done(null); };
+  });
+}
+
+async function renameProject(p) {
+  const newName = await openRenameModal(p.name);
+  if (newName == null || newName === p.name) return;
+  try {
+    if (state.slug === p.slug && state.project) {
+      state.project.meta.name = newName;
+      markDirty();
+      await saveNow();
+    } else {
+      const res = await api(`/api/projects/${p.slug}`);
+      const proj = res.project;
+      proj.meta.name = newName;
+      await api(`/api/projects/${p.slug}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proj, null, 2),
+      });
+    }
+  } catch (e) {
+    setSaveStatus("error", `改名失敗：${e.message}`);
     return;
   }
-  if (v && v !== state.slug) await openProject(v);
-  sel.value = state.slug || "";
+  await loadProjectList();
+  renderViews();                       // 頂端標題與側欄一起更新
+  setSaveStatus("saved", `已改名：${newName}`);
 }
 
 async function deleteProject(slug, name) {
@@ -6898,8 +6980,14 @@ function init() {
   document.querySelectorAll(".nav-btn").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
   $("#btn-new-project").addEventListener("click", openNewModal);
-  const projSel = $("#project-select");
-  if (projSel) projSel.addEventListener("change", () => onProjectSelectChange(projSel));
+  const projBtn = $("#project-picker-btn");
+  if (projBtn) projBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleProjectPicker(); });
+  // 點面板外面或按 Esc 收起專案下拉（面板內的按鈕自己會 stopPropagation）
+  document.addEventListener("click", (e) => {
+    const picker = $("#project-picker");
+    if (picker && !picker.contains(e.target)) closeProjectPicker();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeProjectPicker(); });
   $("#new-cancel").addEventListener("click", closeNewModal);
   $("#new-create").addEventListener("click", createProject);
   $("#new-name").addEventListener("keydown", (e) => { if (e.key === "Enter") createProject(); });
