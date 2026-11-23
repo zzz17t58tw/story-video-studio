@@ -188,10 +188,6 @@ def _card_context(project: dict) -> str:
     }, ensure_ascii=False, indent=2)
 
 
-def _existing_episode_ids(project: dict) -> list[str]:
-    return [ep.get("id") for ep in ((project.get("script") or {}).get("episodes") or []) if isinstance(ep, dict)]
-
-
 # ── 整集劇本 ───────────────────────────────────────────────────
 _SCRIPT_SCHEMA = """\
 {
