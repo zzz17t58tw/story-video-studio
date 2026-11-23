@@ -8,6 +8,60 @@
 
 （尚無未發佈變更）
 
+## [0.9.16] - 2026-11-23
+
+### 一鍵佈署拆成三個範圍（故事頁縮範圍，劇本／鏡頭各一顆）
+
+**為什麼**：使用者指出「一鍵佈署範圍太大要拆開」——一次跑四層要 2–5 分鐘，中途失敗很難判斷是哪一層；而且故事頁那顆按鈕實際做了劇本與分鏡，跟「故事寫完只想先有角色與場景」的直覺不符。
+
+- **故事頁**：按鈕改名「🚀 一鍵佈署到角色與場景」，只跑 `cast`＋`locations`（約 46 秒實測），劇本與分鏡留給各自的頁面。
+- **劇本頁**：新增「🚀 一鍵佈署劇本」卡（`scope=script`）——用**專案現有的**角色卡／場景卡寫一集，這些卡片不動（實測 15 秒）。
+- **鏡頭頁**：新增「🚀 一鍵佈署分鏡」卡（`scope=shots`）——只為**最新一集**的場次拆鏡頭，劇本／角色／場景都不動（實測 2 場 67 秒）。
+- 後端：`deploy.SCOPES`／`SCOPE_LABEL`／`norm_opts` 的 `scope`；新 `_run_cast_locations`／`_run_script_only`／`_run_shots_only`；`_check_prereq()` 依範圍給「先按哪一顆」的中文指示；清理改成按範圍（`_purge_script_layer` 只清劇本＋鏡頭、`_purge_shots_of_scenes` 只清該集場次的鏡頭）。`run_steps_landing()` 對 `scope=all` 走原本四步流程，其餘在前面分派——舊行為完全保留。
+- 舊呼叫端（不帶 `scope` 的 `POST /deploy`）＝`all`，向後相容。
+- 前端：`DP_SCOPE` 決定彈窗標題、要顯示哪些參數、覆蓋說明的文字與進度清單；`reattachDeployJob()` 從 job 的 `params.scope` 還原範圍。三個按鈕都**沒有** `title` 提示。
+- 驗證：`scripts/check_deploy_scopes.py`（離線、假模型；斷言三個範圍只動自己那層＋前置條件會擋），另有線上實跑 46.5s／15.0s／67.4s 三段。
+- 影響半徑：`app/deploy.py`（新增範圍函式、`start/preview` 前置檢查）、`app/server.py`（`DeployBody.scope` 與 opts 傳遞）、`app/agentdoc.py`（route note）、`static/app.js`（三張卡＋彈窗）。各分頁原有卡片、生成／合併、對話抽屜皆未動。
+
+
+## [0.9.15] - 2026-11-23
+
+### UI：專案下拉改自製面板，每列右側恢復「✕ 刪除」並新增「✎ 編輯名稱」
+
+**為什麼**：0.9.14 把專案清單收成原生 `<select>`，塞不進每列的按鈕，刪除只能藏在下拉的最後一項。使用者要求「刪除維持上一版在每個專案的右側 ✕ 按鈕，並且新增編輯按鈕可改專案名稱」，並選擇保留下拉形式。
+
+- 側欄仍是兩格（「＋ 新專案」＋下拉），但下拉改為自製面板：點一下展開，每列＝`專案名`＋`N 鏡`＋右側 `✎`（編輯名稱）與 `✕`（刪除）；面板寬 262px、可捲動、點外面或 Esc 收合。
+- **改名**：`✎` 開站內彈窗 `#modal-rename`（Enter 送出、Esc 取消、空白名稱擋下），只改 `meta.name`，資料夾 slug 不動。目前專案走 `state.project.meta.name` ＋ `saveNow()`；非目前專案走 `GET /api/projects/{slug}` → 改 `meta.name` → `PUT`（沿用既有端點，後端零改動）。
+- **刪除**：回到每列右側的 `✕`，確認框維持站內 `SVSConfirm`；取消不會刪、選取不受影響。
+- 按鈕不加 `title` 提示，避免 0.9.14 修掉的黑框閃爍再回來。
+- 影響半徑：`static/index.html`（專案區塊＋改名彈窗）、`static/app.js`（`renderProjectList`／picker／`renameProject`／init 綁定）、`static/style.css`（picker 樣式）。後端、其他分頁、儲存流程皆未動。
+
+
+## [0.9.14] - 2026-11-23
+
+### UI：左側專案清單改成下拉選單（垂直切片，其餘不動）
+
+**為什麼**：專案一多，左側清單就把「製作流程」導覽往下擠，使用者要求「縮成下拉選單，只留開新專案按鈕與下拉選單兩格」。
+
+- `static/index.html` 的專案區塊：`<ul id="project-list">` 換成 `＋ 新專案` 按鈕＋`<select id="project-select">` 兩格（同一列）。
+- `renderProjectList()` 改為渲染 `<option>`（文字＝「專案名（N 鏡）」）；未選專案時第一項是「請選擇專案…」，選單本身不再重建，所以切換時不會再讓游標底下的按鈕被換掉。
+- 刪除專案收進同一個下拉（最後一項「－ 刪除目前專案（移到 _trash）－」），選到先跳站內 `SVSConfirm`，取消就把選取還原、不會誤刪；原生 `confirm()` 只剩沒有 SVSConfirm 時的退路。
+- 影響半徑：只有側欄專案區塊與 `deleteProject()` 的確認框；導覽分頁、各頁卡片、儲存流程、後端 API 全部未動。
+
+### 修正：切換專案時「一閃即逝的小黑框」
+
+**原因**：舊清單每顆專案按鈕都帶 `title="開啟 <專案名>"`；切換專案時 `renderProjectList()` 把按鈕整批重建，游標底下的新節點重新觸發原生提示框（WebView2 深色主題＝小黑框），提示框隨即又被下一次重繪收掉。
+
+- 專案按鈕連同 `title` 一起移除，改成下拉選單（同上）→ 切換時不再有會被重建的提示框。
+
+### 一併入庫：前次已完成但尚未 commit 的修正
+
+- 多角度設定表：`use_layout_image` 預設關閉並移除 layout 鏈（黑框／座標文字不再畫進成品）、`crop_sheet()` 支援上下內縮裁切；`clip` 第一候選改為實測可載入的 `qwen3vl_32b_heretic_minimax_h3_nvfp4`（原 int8_convrot 會 dequantize 失敗）。
+- 參考圖：角色的刪圖改成立刻落地（`refImageGrid({saveImmediately:true})`），場景維持 debounce。
+- 性別下拉：`selectField(..., keepUnknown)` 只給性別欄位開啟，舊資料的長句仍可顯示。
+- `background` 欄位停用但保留白名單與重新佈署時的保留邏輯（舊資料不會被清掉）；負向提示只注入故事擴寫／章回任務，不再進全部聊天任務的 context。
+
+
 ## [0.9.13] - 2026-11-22
 
 ### 復原：擴寫大綱回到最初版本（只寫主線，不寫台詞）

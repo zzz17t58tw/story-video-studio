@@ -759,6 +759,8 @@ APPLY_FIELD_WHITELIST = {
               "chapters", "chapters.*.title", "chapters.*.body", "chapters.*.summary"},
     "character": {
         "appearance.promptEn", "appearance.face", "appearance.hair", "appearance.body", "appearance.skin",
+        # background.*：UI 與生成流程已移除，但保留白名單讓舊前端／既有腳本送這個欄位不會 400
+        "background.birth", "background.personality", "background.goal", "background.secret",
         "voice.desc",
         "outfits", "outfits.*.name", "outfits.*.desc", "outfits.*.promptEn",
     },

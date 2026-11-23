@@ -1106,7 +1106,8 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
 
 # ── 一鍵佈署：故事 → 角色 / 場景 / 劇本 / 鏡頭（只建文字，圖片全空）─────
 class DeployBody(BaseModel):
-    """一鍵佈署參數。預設 dryRun=false（真的寫入）、overwrite=false（append 接續編號）。"""
+    """一鍵佈署參數。scope 決定只跑哪幾層（預設 all＝四層全跑，向後相容）。"""
+    scope: str = "all"          # all / cast_locations / script / shots
     characterCount: int = 3
     sceneCount: int = 2
     shotCount: int = 6
@@ -1151,8 +1152,9 @@ def api_deploy(slug: str, body: Optional[DeployBody] = None):
     dryRun=true：同步跑完四步但**不寫檔**，回 {preview, warnings}（給「先預覽」用）。
     """
     b = body or DeployBody()
-    opts = {"characterCount": b.characterCount, "sceneCount": b.sceneCount, "shotCount": b.shotCount,
-            "shotSeconds": b.shotSeconds, "overwrite": bool(b.overwrite), "dryRun": bool(b.dryRun)}
+    opts = {"scope": b.scope, "characterCount": b.characterCount, "sceneCount": b.sceneCount,
+            "shotCount": b.shotCount, "shotSeconds": b.shotSeconds,
+            "overwrite": bool(b.overwrite), "dryRun": bool(b.dryRun)}
     try:
         storage.load_project(slug)
     except StorageError as e:

@@ -184,7 +184,7 @@ ROUTE_NOTES: dict[tuple[str, str], dict[str, str]] = {
     ("POST", "/api/projects/{slug}/shots/{shot_id}/compile-prompt"): {"purpose": "用模板編譯這一鏡的六段式 promptEn（不呼叫模型）", "when": "promptEn 是空的或是舊稿", "side_effect": "寫 shots[].promptEn"},
     ("POST", "/api/projects/{slug}/shots/{shot_id}/build-reference-plan"): {"purpose": "產生 referencePlan 槽位（誰是 <Picture 1>）", "when": "參考圖有變動、或 promptEn 的 <Picture N> 對不上", "side_effect": "寫 shots[].referencePlan"},
     ("GET", "/api/projects/{slug}/deploy/info"): {"purpose": "一鍵佈署前的情境資訊（已有多少內容、append 會怎麼編號）", "when": "按一鍵佈署前", "side_effect": "無"},
-    ("POST", "/api/projects/{slug}/deploy"): {"purpose": "一鍵佈署：模型一次補齊劇本／分鏡／提示詞（4 次呼叫，1–3 分鐘）", "when": "內容還很空、想快速成型", "side_effect": "背景 job；會依情境覆寫，先看 deploy/info"},
+    ("POST", "/api/projects/{slug}/deploy"): {"purpose": "一鍵佈署（**分範圍**）：body 的 scope=cast_locations（角色＋場景）／script（用現有卡片寫一集）／shots（為最新一集拆鏡頭）／all（四層全跑）；每次只呼叫該範圍需要的模型次數", "when": "內容還很空、想快速成型；建議照 角色與場景 → 劇本 → 分鏡 的順序分別按", "side_effect": "背景 job；scope=script/shots 只清自己那層（script 會連鏡頭一起清），cast_locations 覆蓋時四層全清；先看 deploy/info"},
     ("GET", "/api/projects/{slug}/assemble/plan"): {"purpose": "合併前檢查（缺片／參數不一致／建議模式／總時長）", "when": "合併前必看", "side_effect": "無"},
     ("POST", "/api/projects/{slug}/assemble"): {"purpose": "用 ffmpeg 合併成片", "when": "plan 說可以合了", "side_effect": "產出 output/*.mp4"},
     ("GET", "/api/projects/{slug}/outputs"): {"purpose": "成品清單（新到舊）", "when": "找上次合併的檔", "side_effect": "無"},

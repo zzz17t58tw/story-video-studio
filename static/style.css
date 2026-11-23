@@ -39,6 +39,26 @@ body {
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .panel h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg-dim); }
 
+.project-bar { display: flex; align-items: center; gap: 6px; }
+.project-bar .btn { flex: 0 0 auto; }
+.project-picker { position: relative; flex: 1 1 auto; min-width: 0; }
+.project-picker-btn { width: 100%; display: flex; align-items: center; gap: 6px; background: var(--bg-3); border: 1px solid var(--line); border-radius: var(--radius); color: var(--fg); padding: 6px 8px; font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.project-picker-btn:hover:not(:disabled) { border-color: var(--accent); }
+.project-picker-btn:disabled { color: var(--fg-dim); cursor: default; }
+.project-picker-btn .pp-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-picker-btn .pp-caret { flex: 0 0 auto; color: var(--fg-dim); font-size: 10px; }
+.project-picker-menu { position: absolute; right: 0; left: auto; width: 262px; max-width: calc(100vw - 24px); top: calc(100% + 4px); z-index: 40; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 26px rgba(0, 0, 0, .45); max-height: 320px; overflow-y: auto; padding: 4px; }
+.pp-row { display: flex; align-items: stretch; gap: 2px; border-radius: var(--radius); }
+.pp-row:hover { background: var(--bg-3); }
+.pp-row.active { background: var(--accent-2); }
+.pp-row.active .pp-open, .pp-row.active .pp-meta { color: #fff; }
+.pp-open { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; color: var(--fg); padding: 7px 8px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; border-radius: var(--radius); }
+.pp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-meta { flex: 0 0 auto; color: var(--fg-dim); font-size: 11px; }
+.pp-act { flex: 0 0 auto; width: 26px; background: none; border: 0; color: var(--fg-dim); cursor: pointer; font-size: 13px; border-radius: var(--radius); }
+.pp-act:hover { background: var(--bg); color: var(--accent); }
+.pp-act.pp-del:hover { color: var(--err); }
+
 .project-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .project-item { display: flex; align-items: stretch; gap: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-3); }
 .project-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-2) inset; }

@@ -130,8 +130,7 @@ def _project_context(project: dict) -> str:
         f"專案名稱：{meta.get('name') or '（未命名）'}",
         f"畫面比例：{meta.get('aspectRatio') or '9:16'}（fps {meta.get('fps') or 24}）",
         f"故事概念：{_clip(story.get('premise'), 300) or '（尚未填寫）'}",
-        f"風格：類型 {style.get('genre') or '—'}／基調 {style.get('tone') or '—'}／視覺 {style.get('visualStyle') or '—'}"
-        f"／負向提示 {style.get('negative') or '—'}",
+        f"風格：類型 {style.get('genre') or '—'}／基調 {style.get('tone') or '—'}／視覺 {style.get('visualStyle') or '—'}",
     ]
     if isinstance(story.get("synopsis"), str) and story["synopsis"].strip():
         lines.append(f"現有大綱（前 400 字）：{_clip(story['synopsis'], 400)}")
@@ -281,6 +280,11 @@ def build_system(project: dict, kind: str | None, target: dict | None, task: str
             "目前這張卡的完整資料（JSON；請以此為基礎修改，未提到的欄位請保持原意）：",
             json.dumps(target, ensure_ascii=False, indent=2),
         ]
+    # 只有故事擴寫／章回需要負向提示：不動 _project_context（那會影響全部聊天任務）
+    if task in ("story_outline", "story_chapters"):
+        st = ((project or {}).get("story") or {}).get("style") or {}
+        parts.append(f"\n【本次任務的風格】類型 {st.get('genre') or '—'}／基調 {st.get('tone') or '—'}"
+                     f"／視覺 {st.get('visualStyle') or '—'}／負向提示 {st.get('negative') or '—'}")
     rule = _TASK_RULES.get(task or "")
     if rule:
         parts += ["\n【本次任務】", rule]
