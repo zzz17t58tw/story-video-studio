@@ -1606,9 +1606,12 @@ H3SHEET_FILES = {
     "unet": "minimax_h3_image_pruned_w4a8.safetensors",
     # 官方 int8_convrot 的 qwen3vl_32b 也不在本機 → 先照檔名試清單裡的 32B（NVFP4／AWQ／int8_uncensored），
     # 每個候選逐次嘗試、第一次送件成功就記住（見 _h3sheet_failed_clips）；全部不行時回中文原因＋手動指定。
-    "clip": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+    # 2026-11-22 實測：int8_convrot 在這台載入後 dequantize 失敗（No backend can handle
+    # 'dequantize_int8_embedding'），每次都要先失敗一輪才換下一顆，白等 20–30 秒；
+    # nvfp4_heretic 直接可用（多視角測試 3 次都靠它跑完）。
+    "clip": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
     "clipCandidates": (
-        "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+        "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
         "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         "qwen3vl_32b_minimax_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
     ),
@@ -1720,7 +1723,8 @@ def pick_character_full_ref(project: dict, ch: dict) -> dict | None:
 
 
 def build_h3sheet_graph(ref_name: str, state_json: str, style: str, prefix: str,
-                        seed: int | None = None, clip_name: str | None = None) -> tuple[dict, dict]:
+                        seed: int | None = None, clip_name: str | None = None,
+                        use_layout: bool = False) -> tuple[dict, dict]:
     """在 UI 副本上寫參數 → 轉 API 節點圖（原檔不動），回 (graph, report)。
 
     只留節點 9/27-33/42/48/56/63-69/75/76/78-79（MarkdownNote、Reroute 不轉）；
@@ -1743,13 +1747,32 @@ def build_h3sheet_graph(ref_name: str, state_json: str, style: str, prefix: str,
     nodes[69]["widgets_values"][0] = ref_name
     wv = nodes[68]["widgets_values"]
     wv[0] = state_json
-    wv[1] = True                                   # use_layout_image：輸出拼版圖（要存檔裁切）
+    wv[1] = bool(use_layout)                       # use_layout_image：輸出「版位示意圖」給模型參考
     wv[2] = style if style in H3SHEET_STYLES else "none"
     # 3) 種子（節點 66）＋ 存檔前綴（節點 9）
     nodes[66]["widgets_values"][0] = int(seed if seed is not None else random.randint(0, 2 ** 63 - 1))
     nodes[9]["widgets_values"][0] = prefix
 
     graph = _h3sheet_ui_to_api(ui, keep)
+
+    if not use_layout:
+        # layout_image 是「版位示意圖」（白底 + 黑色框線 + 假人剪影），餵給模型會讓它把
+        # 框線與「1 face_front [2,2,664,1278]」這類標註文字一起畫進成品（2026-11-22 實測）。
+        # OFF 時節點 68 的 layout_image 輸出 None，下游 Resize(56/48) 會收到 None →
+        # 直接移除那條鏈，尺寸改由節點 68 自己的 width/height 輸出提供。
+        for nid in ("56", "48", "78"):
+            graph.pop(nid, None)
+        ins = graph["32"]["inputs"]
+        ins.pop("images.image_1", None)
+        rest = [(k, v) for k, v in ins.items()
+                if k.startswith("images.image_") and k != "images.image_1"]
+        for k, _v in rest:
+            ins.pop(k, None)
+        for i, (_k, v) in enumerate(rest):
+            ins[f"images.image_{i}"] = v
+        ins["width"] = ["68", 1]
+        ins["height"] = ["68", 2]
+
     report = {
         "unet": graph["29"]["inputs"].get("unet_name"),
         "clip": graph["30"]["inputs"].get("clip_name"),
@@ -1757,6 +1780,7 @@ def build_h3sheet_graph(ref_name: str, state_json: str, style: str, prefix: str,
         "vae": graph["31"]["inputs"].get("vae_name"),
         "style": graph["68"]["inputs"].get("style"),
         "seed": graph["66"]["inputs"].get("noise_seed"),
+        "useLayout": bool(graph["68"]["inputs"].get("use_layout_image")),
         "nodeCount": len(graph),
     }
     for nid, fields in H3SHEET_REQUIRED_CHAIN.items():
@@ -1876,8 +1900,14 @@ def _sheet_layout_guess(path: Path, n_views: int) -> tuple[str, int]:
 
 
 def crop_sheet(path: Path, n_views: int, out_dir: Path, stem: str,
-               direction: str | None = None, cols: int | None = None) -> list[Path]:
-    """把拼版大圖平均切成 n_views 張（依方向／每列格數）。任何失敗都回 []（不影響交付）。"""
+               direction: str | None = None, cols: int | None = None,
+               inset_top_px: int = 0, inset_side_px: int = 0) -> list[Path]:
+    """把拼版大圖平均切成 n_views 張（依方向／每列格數）。任何失敗都回 []（不影響交付）。
+
+    inset_top_px／inset_side_px：每格向內縮的像素。H3 設定表的 prompt 會把每格座標
+    寫成「region records」，模型常把那些座標文字一起畫在每格頂部（實測），內縮可以把
+    標註條切掉，交出乾淨的單張。
+    """
     try:
         from PIL import Image
     except Exception:  # noqa: BLE001 — 沒裝 PIL 就只交付整張
@@ -1898,7 +1928,10 @@ def crop_sheet(path: Path, n_views: int, out_dir: Path, stem: str,
         saved: list[Path] = []
         for idx in range(n_views):
             r, c = divmod(idx, cols)
-            box = (c * cw, r * chh, (c + 1) * cw, (r + 1) * chh)
+            top_in = max(0, min(int(inset_top_px), max(0, chh // 3))) if r == 0 else 0
+            side_in = max(0, min(int(inset_side_px), max(0, cw // 6)))
+            box = (c * cw + side_in, r * chh + top_in,
+                   (c + 1) * cw - side_in, (r + 1) * chh)
             target = out_dir / f"{stem}_{idx + 1:02d}.png"
             img.crop(box).save(target)
             saved.append(target)
@@ -1971,6 +2004,9 @@ def _generate_character_sheet_angles_impl(project: dict, cid: str, opts: dict) -
     except (TypeError, ValueError):
         seed = random.randint(0, 2 ** 63 - 1)
     crop = bool(opts.get("crop", True))
+    # use_layout=True 會把「白底+黑框+假人」的版位圖餵給模型 → 模型常把黑框一起畫進成品；
+    # False 時 prompt 會帶每格座標，模型也可能把座標文字畫在頂部 → 靠裁切內縮切掉。
+    use_layout = bool(opts.get("useLayout", False))
     timeout = _clamp_int(opts.get("timeout"), 120, 7200, H3SHEET_TIMEOUT)
 
     base_url = _comfy_base(project)
@@ -2023,7 +2059,8 @@ def _generate_character_sheet_angles_impl(project: dict, cid: str, opts: dict) -
     report: dict = {}
     last_err = ""
     for clip_name in clip_order:
-        graph, report = build_h3sheet_graph(ref_name, state_json, style, prefix, seed, clip_name)
+        graph, report = build_h3sheet_graph(ref_name, state_json, style, prefix, seed, clip_name,
+                                            use_layout=use_layout)
         try:
             pid = comfy.submit(graph, base_url)
         except comfy.ComfyError as e:
@@ -2081,7 +2118,10 @@ def _generate_character_sheet_angles_impl(project: dict, cid: str, opts: dict) -
             direction, cols = "v", 1
         else:
             direction, cols = _sheet_layout_guess(main_path, len(views))
-        outs = crop_sheet(main_path, len(views), dest_dir, main_path.stem, direction, cols)
+        inset_top = 0 if use_layout else max(8, int((height or 0) * 0.05))
+        inset_side = max(0, int((width or 0) * 0.003))
+        outs = crop_sheet(main_path, len(views), dest_dir, main_path.stem, direction, cols,
+                          inset_top_px=inset_top, inset_side_px=inset_side)
         if len(outs) == len(views):
             for i, p in enumerate(outs):
                 crops.append({"path": f"media/characters/{p.name}", "view": views[i],
@@ -2116,7 +2156,7 @@ def _generate_character_sheet_angles_impl(project: dict, cid: str, opts: dict) -
             "url": f"/files/{slug}/{rel_path}", "pid": pid, "elapsed": elapsed,
             "width": width, "height": height, "views": views, "style": style,
             "bodyHeight": body_height, "megapixels": megapixels, "seed": seed,
-            "crops": crops, "sourceRef": _s(ref["path"]), "warnings": warnings,
+            "crops": crops, "sourceRef": _s(ref["path"]), "useLayout": use_layout, "warnings": warnings,
             "loaders": report}
 
 

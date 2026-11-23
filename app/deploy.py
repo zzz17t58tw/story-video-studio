@@ -816,9 +816,13 @@ def gen_shots_for_scene(project: dict, cfg: dict, chars: list[dict], scenes: lis
 def _merge_in_place(target: dict, new: dict) -> None:
     """同 id 就地換內容（保留順序與位置），新欄位的圖片欄位一律留空。"""
     keep = {"refImages": [], "lockedFace": False, "stages": []}
+    old_bg = target.get("background")
     target.clear()
     target.update(new)
     target.update(keep)
+    # background 已從 UI／生成流程移除，但既有資料不因為「重新佈署」被清掉
+    if "background" not in new and isinstance(old_bg, dict) and old_bg:
+        target["background"] = old_bg
 
 
 def apply_preview(slug: str, preview: dict, overwrite: bool) -> dict:

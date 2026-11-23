@@ -39,6 +39,12 @@ body {
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .panel h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg-dim); }
 
+.project-bar { display: flex; align-items: center; gap: 6px; }
+.project-bar .btn { flex: 0 0 auto; }
+.project-select { flex: 1 1 auto; min-width: 0; background: var(--bg-3); border: 1px solid var(--line); border-radius: var(--radius); color: var(--fg); padding: 6px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.project-select:hover { border-color: var(--accent); }
+.project-select:disabled { color: var(--fg-dim); cursor: default; }
+
 .project-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .project-item { display: flex; align-items: stretch; gap: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-3); }
 .project-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-2) inset; }

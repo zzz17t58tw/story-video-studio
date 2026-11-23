@@ -120,30 +120,54 @@ async function loadProjectList() {
 }
 
 function renderProjectList() {
-  const ul = $("#project-list");
-  ul.textContent = "";
-  $("#project-empty").classList.toggle("hidden", state.projects.length > 0);
-  for (const p of state.projects) {
-    const li = el("li", { class: "project-item" + (p.slug === state.slug ? " active" : "") });
-    li.append(
-      el("button", {
-        class: "project-open", type: "button", title: `開啟 ${p.name}`,
-        onclick: () => openProject(p.slug),
-      },
-        el("span", { class: "project-name", text: p.name }),
-        el("span", { class: "project-meta", text: `${p.shotCount} 鏡 · ${(p.updatedAt || "").slice(0, 16).replace("T", " ")}` }),
-      ),
-      el("button", {
-        class: "project-del", type: "button", title: "刪除（移到 _trash，不直接刪）",
-        onclick: (ev) => { ev.stopPropagation(); deleteProject(p.slug, p.name); },
-      }, "✕"),
-    );
-    ul.append(li);
+  const sel = $("#project-select");
+  const empty = $("#project-empty");
+  if (!sel) return;                      // init 期間 DOM 還沒好時直接跳過
+  const has = state.projects.length > 0;
+  if (empty) empty.classList.toggle("hidden", has);
+  sel.textContent = "";
+  if (!has) {
+    sel.append(el("option", { value: "", text: "（尚無專案）" }));
+    sel.disabled = true;
+    return;
   }
+  sel.disabled = false;
+  if (!state.slug) sel.append(el("option", { value: "", text: "請選擇專案…" }));
+  for (const p of state.projects) {
+    sel.append(el("option", {
+      value: p.slug,
+      text: `${p.name}（${p.shotCount} 鏡）`,
+    }));
+  }
+  // 刪除收進同一個下拉（維持側欄只有兩格）；選到時會先跳確認框，取消就把選項還原。
+  if (state.slug) sel.append(el("option", { value: "__delete__", text: "－ 刪除目前專案（移到 _trash）－" }));
+  sel.value = state.slug || "";
+}
+
+async function onProjectSelectChange(sel) {
+  const v = sel.value;
+  if (v === "__delete__") {
+    sel.value = state.slug || "";
+    const p = state.projects.find((x) => x.slug === state.slug);
+    if (p) await deleteProject(p.slug, p.name);
+    sel.value = state.slug || "";
+    return;
+  }
+  if (v && v !== state.slug) await openProject(v);
+  sel.value = state.slug || "";
 }
 
 async function deleteProject(slug, name) {
-  if (!confirm(`要刪除專案「${name}」嗎？\n（不會真的刪檔，會移到 projects/_trash/）`)) return;
+  // 從下拉選單觸發：先用站內確認框（取消就回到原本選取），沒有 SVSConfirm 時退回原生 confirm。
+  const ok = window.SVSConfirm
+    ? await window.SVSConfirm({
+        title: `刪除專案「${name}」`,
+        plain: true,
+        okText: "仍要刪除",
+        refs: [`「${name}」會移到 projects/_trash/（實體檔不會立刻刪掉，可救回）。`],
+      })
+    : confirm(`要刪除專案「${name}」嗎？\n（不會真的刪檔，會移到 projects/_trash/）`);
+  if (!ok) return;
   try {
     await api(`/api/projects/${slug}`, { method: "DELETE" });
   } catch (e) {
@@ -414,14 +438,14 @@ function linesField(labelText, obj, key, placeholder) {
   return el("label", { class: "field" }, el("span", { text: labelText }), ta);
 }
 
-function selectField(labelText, obj, key, options, allowEmpty = true) {
+function selectField(labelText, obj, key, options, allowEmpty = true, keepUnknown = false) {
   const sel = el("select", {});
   if (allowEmpty) sel.append(el("option", { value: "", text: "（未設定）" }));
-  // 舊資料／外部模型可能給非枚舉值（例如性別寫成「男性，喉結明顯」）→ 保留它顯示，
-  // 不要讓 select 因為對不到選項而自己跳回空白（使用者會以為資料沒寫進去）。
+  // keepUnknown：值不在選項裡時也留一個 option 顯示（性別用）。
+  // 只給需要的欄位開，避免改動其他下拉選單的行為。
   const cur = obj[key] == null ? "" : String(obj[key]);
   const opts = [...options];
-  if (cur && !opts.includes(cur)) opts.push(cur);
+  if (keepUnknown && cur && !opts.includes(cur)) opts.push(cur);
   for (const o of opts) sel.append(el("option", { value: o, text: o }));
   sel.value = cur;
   sel.addEventListener("change", () => { obj[key] = sel.value; markDirty(); });
@@ -600,10 +624,10 @@ function refImageGrid(list, opts = {}) {
             list.splice(idx, 1);
             if (opts.onChanged) opts.onChanged();
             markDirty();
-            // 立刻落地：生圖任務可能幾分鐘後才寫回，不能讓它用「開始生成時」的舊快照
-            // 把這次刪除蓋回來（實測：刪掉的圖會在生成完成後復活）。
-            clearTimeout(state.saveTimer);
-            saveNow();
+            // 角色的參考圖要立刻落地：立繪／多角度任務幾分鐘後才寫回，不能讓它用
+            // 「開始生成時」的舊快照把這次刪除蓋回來（實測：刪掉的圖會復活）。
+            // 場景參考圖沒有背景任務會動它，維持原本的 debounce 行為。
+            if (opts.saveImmediately) { clearTimeout(state.saveTimer); saveNow(); }
             renderViews();
           },
         }, "✕"),
@@ -711,7 +735,7 @@ function charCard(ch) {
   const apGrid = el("div", { class: "field-grid" });
   apGrid.append(
     field("年齡（age）", ap, "age", "例如：17 歲少女", false),
-    selectField("性別（gender）", ap, "gender", ["女", "男", "其他"], false),
+    selectField("性別（gender）", ap, "gender", ["女", "男", "其他"], false, true),
     field("膚色 / 膚質（skin）", ap, "skin", "例如：小麥色、臉頰有雀斑", false),
     field("臉型五官（face）", ap, "face", "例如：圓臉、大眼、單眼皮", false),
     field("髮型髮色（hair）", ap, "hair", "例如：黑色及腰直髮、瀏海", false),
@@ -822,7 +846,7 @@ function charCard(ch) {
   }, { label: "選擇參考圖（可多選）：" }));
   refCard.append(refImageGrid(ch.refImages, {
     title: ch.name || ch.id, kinds: ["face", "full", "outfit"],
-    onKindChange: true,
+    onKindChange: true, saveImmediately: true,
     empty: "尚無參考圖。上傳後可選「臉／全身／服裝」並勾鎖臉。",
   }));
   wrap.append(refCard);
@@ -6874,6 +6898,8 @@ function init() {
   document.querySelectorAll(".nav-btn").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
   $("#btn-new-project").addEventListener("click", openNewModal);
+  const projSel = $("#project-select");
+  if (projSel) projSel.addEventListener("change", () => onProjectSelectChange(projSel));
   $("#new-cancel").addEventListener("click", closeNewModal);
   $("#new-create").addEventListener("click", createProject);
   $("#new-name").addEventListener("keydown", (e) => { if (e.key === "Enter") createProject(); });
