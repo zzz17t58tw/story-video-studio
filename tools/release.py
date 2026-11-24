@@ -253,6 +253,13 @@ def rebuild_clean(version: str) -> Path:
             encoding="utf-8")
         info("找不到 docs/使用說明.txt，已寫入最小說明檔")
     info("使用說明.txt ✓")
+    # v0.9.21：使用者要求「每次網路端更新都要到最新」——說明檔必須是這一版的，
+    # 不准沿用舊檔（乾淨版曾發生 exe 一路升到 0.9.21、說明還停在 11/18 的情況）。
+    _u = (CLEAN_DIR / "使用說明.txt").read_text(encoding="utf-8", errors="ignore")
+    if f"v{version}" not in _u:
+        fail(f"使用說明.txt 沒有寫到「v{version}」：docs/使用說明.txt 的版本行忘了更新。"
+             f"乾淨版的說明會跟程式對不上，先改那份再重跑。")
+    info(f"使用說明.txt 版本戳 v{version} ✓")
 
     # 殘留物清掉（乾淨版不能有日誌／快取）
     for junk in CLEAN_DIR.rglob("_internal/launcher.log"):
