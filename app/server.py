@@ -786,6 +786,11 @@ def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video"))
         prompt, pw, source, problems = h3gen._pick_prompt(
             data, shot, sendable, bool(ref_notes.get("firstFrameAsPicture")))
         warnings.extend(pw)
+        # v0.9.21：原稿不合規但送件口已自動改用編譯稿 → 這次送得出合規的字，不該在預覽標紅
+        if source == "compiled" and problems:
+            warnings.append("你的 promptEn 未符合 H3 官方六段式，這次會送出「模板編譯」版本"
+                            "（不會改動你的資料）：" + "；".join(list(problems)[:2]))
+            problems = []
         problems = ref_problems + list(problems)
         ok = not problems
     elif eng == "moss_t2i":
