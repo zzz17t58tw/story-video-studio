@@ -4,17 +4,17 @@
 |---|---|
 | 版本 | **0.9.21**（預發版） |
 | 日期 | 2026-11-24 |
-| 發佈時間 | 2026-11-24 14:05:49（台北） |
-| build 時間 | 2026-11-24 14:05:41 |
-| git HEAD（發佈前） | d02b4b4 feat(promptrules): 三引擎送出口機械判定＋自動轉化（v0.9.21） |
+| 發佈時間 | 2026-11-24 14:07:14（台北） |
+| build 時間 | 2026-11-24 14:07:06 |
+| git HEAD（發佈前） | 2965614 fix(preview): 原稿不合規但已自動用編譯稿時，預覽不再標紅（改成 warning 說明） |
 | 產生工具 | `tools/release.py` |
 
 ## 產物與雜湊
 
 | 用途 | 路徑 | 大小 | SHA-256 |
 |---|---|---|---|
-| exe（使用端） | `dist/StoryVideoStudio/StoryVideoStudio.exe` | 8.7 MB | `c78cccb1d0264639c225acb006c876667aa76135033ad4fb875a9b3299a9f832` |
-| 乾淨版 zip | `release\StoryVideoStudio-v0.9.21-乾淨版.zip` | 129.0 MB（135,297,288 B） | `d3b275da610534104ace34ec2de2a0e003060a6bf805df620be7bb83359505c7` |
+| exe（使用端） | `dist/StoryVideoStudio/StoryVideoStudio.exe` | 8.7 MB | `f7d3320623ffbb828a470ad80cb85ab19f8c9196d213669cf2009b5afca62b55` |
+| 乾淨版 zip | `release\StoryVideoStudio-v0.9.21-乾淨版.zip` | 129.0 MB（135,297,483 B） | `fffd498610a3c7cb848abba2d39a18701e33e2c0f8ef9dadc43f527af5450f76` |
 
 舊 exe 備份：`dist/StoryVideoStudio/StoryVideoStudio.exe.bak-0.9.21`（回滾用，可直接改回原名）
 
