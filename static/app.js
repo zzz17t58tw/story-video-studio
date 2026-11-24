@@ -36,6 +36,39 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 const esc = (s) => String(s ?? "");
 
+// ── v0.9.19：傻瓜預設 / 進階模式 ──────────────────────────────
+// 使用者是非技術背景：預設只看到「做這件事最少要填的東西」，
+// 其餘欄位一項都沒刪，只是包在 .adv-only 裡，勾右上角「⚙ 進階模式」就全部回來。
+const ADV_KEY = "svs.adv";
+function advOn() { return document.body.classList.contains("adv-on"); }
+function setAdvMode(on) {
+  document.body.classList.toggle("adv-on", !!on);
+  try { localStorage.setItem(ADV_KEY, on ? "1" : "0"); } catch (e) {}
+  const cb = $("#adv-toggle");
+  if (cb) cb.checked = !!on;
+  renderAll();   // 傻瓜／進階兩套渲染在同一個函式裡分支，切換後重畫
+}
+function initAdvMode() {
+  let on = false;
+  try { on = localStorage.getItem(ADV_KEY) === "1"; } catch (e) {}
+  document.body.classList.toggle("adv-on", on);
+  const cb = $("#adv-toggle");
+  if (cb) {
+    cb.checked = on;
+    cb.addEventListener("change", () => setAdvMode(cb.checked));
+  }
+}
+// 進階區塊：傻瓜模式看不到、進階模式看得到
+function advBox(...nodes) { return el("div", { class: "adv-only" }, ...nodes); }
+// 傻瓜模式的提示：告訴使用者「這裡還有東西可以調」；進階模式自動隱藏
+function advHint(text) { return el("p", { class: "adv-hint", text }); }
+// 折疊區（進階模式裡也常用：即使開了進階，長內容預設收起）
+function foldBox(title, nodes, open) {
+  const kids = Array.isArray(nodes) ? nodes : [nodes];
+  return el("details", { class: "fold", ...(open ? { open: "" } : {}) },
+    el("summary", { text: title }), ...kids);
+}
+
 function setSaveStatus(kind, text) {
   const box = $("#save-status");
   box.className = "save-status " + kind;
@@ -365,7 +398,7 @@ function renderStory() {
   ]) {
     styleCard.append(field(label, style, key, ph, false));
   }
-  box.append(styleCard);
+  // v0.9.19：風格與章回屬進階，最後統一收進 advBox
 
   // 章回列表
   const chapCard = el("div", { class: "card" });
@@ -383,7 +416,8 @@ function renderStory() {
     chapCard.append(el("p", { class: "hint", text: "尚未有章回。按「＋ 新增章回」開始寫正文。" }));
   }
   story.chapters.forEach((ch, idx) => chapCard.append(chapterBlock(ch, idx)));
-  box.append(chapCard);
+  box.append(advBox(styleCard, chapCard));
+  box.append(advHint("⚙ 進階設定（類型／基調／視覺風格／負向提示、章回正文）在右上角「進階模式」裡。"));
 }
 
 function emptyHint() {
@@ -808,7 +842,7 @@ function charCard(ch) {
     selectField("角色定位（role）", ch, "role", ROLE_OPTIONS),
   );
   wrap.append(grid);
-  wrap.append(linesField("別名（aliases，一行一個）", ch, "aliases", "例如：奶奶口中的「紅斗篷」"));
+  wrap.append(advBox(linesField("別名（aliases，一行一個）", ch, "aliases", "例如：奶奶口中的「紅斗篷」")));
 
   // 外型
   const ap = ensure_obj(ch, "appearance", {});
@@ -818,14 +852,9 @@ function charCard(ch) {
   apGrid.append(
     field("年齡（age）", ap, "age", "例如：17 歲少女", false),
     selectField("性別（gender）", ap, "gender", ["女", "男", "其他"], false, true),
-    field("膚色 / 膚質（skin）", ap, "skin", "例如：小麥色、臉頰有雀斑", false),
-    field("臉型五官（face）", ap, "face", "例如：圓臉、大眼、單眼皮", false),
     field("髮型髮色（hair）", ap, "hair", "例如：黑色及腰直髮、瀏海", false),
-    field("體型（body）", ap, "body", "例如：瘦高、肩膀窄", false),
   );
   apCard.append(apGrid);
-  apCard.append(linesField("辨識特徵（features，一行一條）", ap, "features", "例如：左眉尾有疤"));
-  apCard.append(liveText("英文外型 prompt（promptEn）", ap, "promptEn", "餵生圖用的英文外型描述", { rows: "3" }));
   const composeBtn = el("button", { class: "btn btn-small btn-primary", type: "button" }, "✦ 用外型欄位自動組英文 prompt");
   composeBtn.addEventListener("click", () => {
     const text = composeAppearanceEn(ch);
@@ -835,8 +864,20 @@ function charCard(ch) {
     renderViews();
     setSaveStatus("pending", "已填入英文 prompt，待儲存…");
   });
-  apCard.append(el("div", { class: "row" }, composeBtn,
-    el("span", { class: "hint", text: "純字串拼接，不會呼叫模型；要模型改寫請等 M3。" })));
+  // 進階：膚色／臉型／體型／辨識特徵／英文 prompt（傻瓜模式看不到，資料照存）
+  const apAdv = el("div", { class: "field-grid" });
+  apAdv.append(
+    field("膚色 / 膚質（skin）", ap, "skin", "例如：小麥色、臉頰有雀斑", false),
+    field("臉型五官（face）", ap, "face", "例如：圓臉、大眼、單眼皮", false),
+    field("體型（body）", ap, "body", "例如：瘦高、肩膀窄", false),
+  );
+  apCard.append(advBox(
+    apAdv,
+    linesField("辨識特徵（features，一行一條）", ap, "features", "例如：左眉尾有疤"),
+    liveText("英文外型 prompt（promptEn）", ap, "promptEn", "餵生圖用的英文外型描述", { rows: "3" }),
+    el("div", { class: "row" }, composeBtn,
+      el("span", { class: "hint", text: "純字串拼接，不會呼叫模型；要模型改寫請用右側對話。" })),
+  ));
   wrap.append(apCard);
 
   // 服裝
@@ -878,14 +919,13 @@ function charCard(ch) {
     row.append(liveText("英文 prompt（promptEn）", o, "promptEn", "英文服裝描述", { rows: "2" }));
     outfitCard.append(row);
   });
-  wrap.append(outfitCard);
+  // v0.9.19：outfitCard 移到下方統一的進階區塊
 
   // 背景（background）已移除：它不參與任何生成，只會讓使用者多填五個沒用的欄位。
   // 舊專案裡殘留的 background 資料不主動清除，讀進來也不再用它組提示詞。
 
   // M3d：身份錨點（identityAnchors）＋ 分階段造型（stages）
-  wrap.append(anchorsCard(ch));
-  wrap.append(stagesCard(ch));
+  // v0.9.19：anchorsCard／stagesCard 移到下方統一的進階區塊
 
   // 聲音
   const voice = ensure_obj(ch, "voice", {});
@@ -897,7 +937,7 @@ function charCard(ch) {
     audioRow(voice.refAudio || "", (v) => { voice.refAudio = v; })));
   vCard.append(selectField("配音引擎（engine）", voice, "engine", VOICE_ENGINES, false));
   vCard.append(field("備註（note）", voice, "note", "例如：情緒偏冷、語速 0.9 倍", false));
-  wrap.append(vCard);
+  // v0.9.19：vCard 移到下方統一的進階區塊
 
   // 參考圖
   const refCard = el("div", { class: "subcard" });
@@ -931,10 +971,12 @@ function charCard(ch) {
     onKindChange: true, saveImmediately: true,
     empty: "尚無參考圖。上傳後可選「臉／全身／服裝」並勾鎖臉。",
   }));
-  wrap.append(refCard);
+  // v0.9.19：refCard 移到下方統一的進階區塊
 
   // 第二層：H3 多角度設定表（把上面最新的 kind=full 立繪 → 多視角 i2i）
-  wrap.append(h3SheetCard(ch));
+  // v0.9.19：以下全是進階內容——傻瓜模式收起，功能一項沒少
+  wrap.append(advBox(outfitCard, anchorsCard(ch), stagesCard(ch), vCard, refCard, h3SheetCard(ch)));
+  wrap.append(advHint("⚙ 進階設定（別名、膚色／臉型／體型、辨識特徵、英文外型 prompt、服裝、身份錨點、分階段造型、聲音、參考圖管理、多角度立繪表）都收在右上角「進階模式」裡。"));
 
   // 英文 prompt 一鍵組完後的提示
   const p = (ch.refImages || []).filter((r) => r.locked).slice(0, 3).map((r) => r.path);
@@ -1466,8 +1508,9 @@ function sceneCard(sc) {
     field("光線（lighting）", sc, "lighting", "例如：側逆光、月光從樹縫灑下", false),
     field("氛圍（mood）", sc, "mood", "例如：安靜、帶壓迫感", false),
   );
-  wrap.append(grid2);
-  wrap.append(liveText("英文場景 prompt（promptEn）", sc, "promptEn", "英文場景描述（餵生圖用）", { rows: "3" }));
+  // v0.9.19：光線／氛圍／英文 prompt 屬進階細節
+  wrap.append(advBox(grid2,
+    liveText("英文場景 prompt（promptEn）", sc, "promptEn", "英文場景描述（餵生圖用）", { rows: "3" })));
 
   const amb = ensure_obj(sc, "ambience", {});
   const ambCard = el("div", { class: "subcard" });
@@ -1476,7 +1519,7 @@ function sceneCard(sc) {
   ambCard.append(el("label", { class: "field" },
     el("span", { text: "環境音參照音檔（refAudio）" }),
     audioRow(amb.refAudio || "", (v) => { amb.refAudio = v; })));
-  wrap.append(ambCard);
+  // v0.9.19：ambCard 移到下方進階區塊
 
   const refCard = el("div", { class: "subcard" });
   if (!Array.isArray(sc.refImages)) sc.refImages = [];
@@ -1496,6 +1539,8 @@ function sceneCard(sc) {
     title: sc.name || sc.id, kinds: ["wide", "detail"], onKindChange: true,
     empty: "尚無參考圖。可上傳「全景」定調、「細節」補材質。",
   }));
+  wrap.append(advBox(ambCard));
+  wrap.append(advHint("⚙ 進階設定（光線、氛圍、英文場景 prompt、環境音）在右上角「進階模式」裡。"));
   wrap.append(refCard);
   if (cover) wrap.dataset.cover = cover.path;
   return wrap;
@@ -2029,7 +2074,7 @@ function renderScript() {
     el("h3", { text: `集（episodes）· ${eps.length}` }),
     el("span", { class: "spacer" }),
     el("button", { class: "btn btn-small btn-primary", type: "button", title: "用故事／人物／場景卡一次生成一集（預覽後才寫入）", onclick: () => openGenScript() }, "✦ 由故事生成整集劇本"),
-    el("button", { class: "btn btn-small btn-primary", type: "button", onclick: () => addEpisode() }, "＋ 新增一集"),
+    el("button", { class: "btn btn-small adv-only", type: "button", onclick: () => addEpisode() }, "＋ 新增一集"),
   ));
   if (!eps.length) {
     card.append(el("p", { class: "hint", text: "尚無集。按「＋ 新增一集」，系統自動編 e01、e02…" }));
@@ -2046,7 +2091,7 @@ function renderScript() {
         el("span", { class: "hint", text: `${ep.scenes.length} 個場次 · ${ep.scenes.reduce((n, s) => n + (s.beats || []).filter((b) => b && !b._skipped).length, 0)} 個 beats` }),
       ),
       el("span", { class: "spacer" }),
-      el("button", { class: "btn btn-small btn-primary", type: "button", onclick: () => addSceneToEpisode(ep) }, "＋ 新增場次"),
+      el("button", { class: "btn btn-small adv-only", type: "button", onclick: () => addSceneToEpisode(ep) }, "＋ 新增場次"),
       el("button", { class: "btn btn-small btn-danger", type: "button", onclick: () => removeEpisode(ep) }, "刪除集"),
     ));
     epCard.append(field("集標題（title）", ep, "title", "例如：第一話 · 進森林", false));
@@ -3753,7 +3798,7 @@ function renderShots() {
       "用最新一集的場次與 beats，逐場請模型拆鏡頭（中文描述＋六段式英文 prompt，台詞引用自動對到 beat）。"
       + "劇本、角色卡、場景卡都不會被改動。約每場 25–60 秒。" }),
   );
-  box.append(dpShotsCard);
+  // v0.9.19：一鍵佈署分鏡要用模型拆鏡（花錢），降為進階；傻瓜先看到免費的「🎬 由劇本自動分鏡」
 
   // 工具列
   const filterSel = el("select", { class: "inline-select" },
@@ -3777,15 +3822,18 @@ function renderShots() {
         onclick: () => { sbState.panel = !sbState.panel; if (sbState.panel) sbState.result = null; renderShots(); },
       }, "🎬 由劇本自動分鏡"),
       el("button", { class: "btn btn-small", type: "button", title: "跑機械校驗（含分鏡契約 V1–V5；純邏輯，零 API 成本）", onclick: () => runValidate() }, "✓ 檢查全專案"),
-      el("button", { class: "btn btn-small btn-primary", type: "button", onclick: () => addShot(filterSel.value) }, "＋ 新增鏡頭"),
+      el("button", { class: "btn btn-small adv-only", type: "button", onclick: () => addShot(filterSel.value) }, "＋ 新增鏡頭"),
     ),
     batchToolbarRow(filterSel.value),
-    el("div", { class: "row wrap split-row" },
+    el("div", { class: "row wrap split-row adv-only" },
       el("span", { class: "hint", text: "由場次拆鏡頭草稿：" }), splitSel,
       el("button", { class: "btn btn-small", type: "button", onclick: () => splitDraftFromScene(splitSel.value) }, "⊞ 拆成鏡頭草稿"),
       el("span", { class: "hint", text: "每 beat 一鏡；對白帶入台詞，場景與人物繼承該場次；已存在的鏡頭不會被覆蓋或刪除。" }),
     ),
   ));
+  box.append(advBox(dpShotsCard));
+  box.append(advHint("⚙ 「🚀 一鍵佈署分鏡」（用模型拆鏡、會花錢）、「⊞ 拆成鏡頭草稿」、「＋ 新增鏡頭」都在右上角「進階模式」裡；上面那顆「🎬 由劇本自動分鏡」是免費的，先按它。"))
+;
 
   // M14a：「由劇本自動分鏡」面板（按下 🎬 才展開）＋分鏡表（由上往下讀＝整齣戲）
   if (sbState.panel) box.append(sbBuildPanel());
@@ -4510,9 +4558,11 @@ function renderSettings() {
     el("h3", { text: "project.json（唯讀預覽）" }),
     el("button", { class: "btn btn-small", type: "button", onclick: downloadBackup }, "⬇ 下載備份"),
   ));
-  const pre = el("pre", { class: "json-preview", text: JSON.stringify(state.project, null, 2) });
-  jsonCard.append(pre);
-  box.append(jsonCard);
+  // v0.9.19：整份 JSON 又長又難讀（實測 72,037 字元＝這一頁 97% 的內文），預設折疊、整卡列為進階
+  const jsonText = JSON.stringify(state.project, null, 2);
+  jsonCard.append(foldBox(`原始資料（${jsonText.length.toLocaleString()} 字元，點開檢視）`,
+    el("pre", { class: "json-preview", text: jsonText }), false));
+  box.append(advBox(jsonCard));
 }
 
 function downloadBackup() {
@@ -7052,6 +7102,7 @@ function init() {
   $("#new-name").addEventListener("keydown", (e) => { if (e.key === "Enter") createProject(); });
   $("#modal-new").addEventListener("click", (e) => { if (e.target.id === "modal-new") closeNewModal(); });
   window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
+  initAdvMode();        // v0.9.19：先決定傻瓜／進階，再畫畫面
   renderAll();          // 先畫出「尚未選擇專案」與各分頁佔位，避免右側一片空白
   loadPromptRules();    // M12b：三個引擎的官方提示詞規則卡（後端 app/promptrules.py 是唯一真相）
   loadHealth();         // 資料夾實際位置（frozen 時在 exe 旁，不能只寫死 projects/）

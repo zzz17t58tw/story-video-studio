@@ -635,3 +635,46 @@ body.has-batch .toolbar { position: static; }
 .sb-table td:nth-child(5), .sb-table td:nth-child(6) { white-space: nowrap; }
 .sb-table td:nth-child(5) .sb-tag { display: block; margin: 3px 0 0; text-align: center; }
 .sb-result { margin-top: 8px; }
+
+/* ── v0.9.19：傻瓜預設 / 進階模式 ────────────────────────────
+   原則：功能一項都不刪，只是「預設收起」。body 沒有 .adv-on 時，
+   所有 .adv-only 的區塊都看不到（右上角勾「進階模式」才展開）。
+   .adv-hint 相反：只在傻瓜模式出現，提醒還有細節可調。 */
+.adv-switch {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-right: 12px; padding: 3px 9px;
+  border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12px; color: var(--fg-dim); cursor: pointer;
+  user-select: none; white-space: nowrap;
+}
+.adv-switch:hover { border-color: var(--accent); color: var(--fg); }
+.adv-switch input { width: 13px; height: 13px; margin: 0; cursor: pointer; }
+body.adv-on .adv-switch {
+  border-color: var(--accent); color: var(--accent);
+  background: rgba(90, 169, 255, .12);
+}
+body:not(.adv-on) .adv-only { display: none !important; }
+body.adv-on .adv-hint { display: none !important; }
+.adv-hint {
+  margin: 8px 0 0; padding: 7px 10px;
+  border-left: 3px solid var(--accent-2); border-radius: 4px;
+  background: rgba(90, 169, 255, .07);
+  font-size: 12px; color: var(--fg-dim);
+}
+details.fold {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 6px 10px; margin: 8px 0; background: var(--bg-2);
+}
+details.fold > summary {
+  cursor: pointer; font-size: 13px; color: var(--fg);
+  list-style: none; padding: 2px 0;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸ "; color: var(--fg-dim); }
+details.fold[open] > summary::before { content: "▾ "; }
+details.fold[open] > summary { margin-bottom: 6px; border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.simple-summary {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  font-size: 12px; color: var(--fg-dim); margin: 6px 0 2px;
+}
+.simple-summary b { color: var(--fg); font-weight: 600; }
