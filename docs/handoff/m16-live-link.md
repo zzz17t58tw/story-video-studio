@@ -3,7 +3,7 @@ branch: m16-live-link
 milestone: M16
 status: wip            # wip | ready | merged
 opened: 2026-11-24 18:52（台北）
-files: ["app/h3compose.py", "static/app.js", "scripts/test_live_linkage.py", "docs/handoff/m16-live-link.md"]
+files: ["app/storyboard.py", "app/h3compose.py", "static/app.js", "scripts/test_live_linkage.py", "docs/handoff/m16-live-link.md"]
 ---
 
 # 交接單：m16-live-link
@@ -12,18 +12,23 @@ files: ["app/h3compose.py", "static/app.js", "scripts/test_live_linkage.py", "do
 
 鏡頭頁即時連動 v1 的後續修補：手改的 `promptEn` 不再在存檔時被 `refresh_derived` 覆蓋
 （含舊版前端沒打 `promptEnManual` 旗標的稿子，改為採認保全），並收回 V1 順序降級與
-V5 establish 兩處不必要的規則放寬，驗收腳本補到 T1–T10。
-過程中曝光一個既有排序漏洞（見「未完成」），**未放寬、留給主代理決定**。
+V5 establish 兩處不必要的規則放寬，驗收腳本補到 T1–T11。
+上一輪曝光的 `backfill_shots()` 排序漏洞已依 `docs/shots-live-linkage.md` §8.2 修掉
+（commit `f632f3d`），T3 由 FAIL → PASS，**T1–T11 全線 PASS**。
 
 ## 動到的檔案
 
+- `app/storyboard.py`：`backfill_shots()` 的 `_key()` 分組鍵改成
+  `(場次序, 0=有有效 beatIds／1=沒有, pos, orig_order, …)`——沒有 `beatIds` 的既有鏡
+  （手動／重複／孤兒）排該場次**所有有 beatIds 的鏡之後**，組內依 `orig_order` 維持原相對順序；
+  「有效」定義為「指到本場次真的存在的 beat」。`no` 產生規則、V5 定義、`_group_character_ids` 未動。
 - `app/h3compose.py`：`refresh_derived` 的 D2 三段判定＋`derived.adoptedManual`；
   `_validate_storyboard_contract` 移除 V1 的 `exact_cover` 降級（連帶移除 `unshot_line_issue`
   收回邏輯與 `chain_shots`）與 V5 的 `fillReason==backfill` 分支。
 - `static/app.js`：鏡頭卡摘要支援 `adoptedManual`（「⚠ 舊版手改稿已保留（按「模板編譯」可更新）」）；
   「⌘ 模板編譯 prompt」寫回後清掉 `promptEnManual` 並同步 `derived`。
-- `scripts/test_live_linkage.py`：新增 `disk_shots()`、T9、T10；T1 的測試對象改成「把 c01
-  規則式鏡頭明確設回非手動稿」（母本舊手改稿依新規則被採認為手寫稿）；`ALL` 加 T9／T10。
+- `scripts/test_live_linkage.py`：新增 `disk_shots()`、T9、T10、T11；T1 的測試對象改成「把 c01
+  規則式鏡頭明確設回非手動稿」（母本舊手改稿依新規則被採認為手寫稿）；`ALL` 加 T9／T10／T11。
 
 ## 介面變更
 
@@ -34,16 +39,16 @@ V5 establish 兩處不必要的規則放寬，驗收腳本補到 T1–T10。
 
 ## 未完成／已知限制
 
-1. **（需主代理裁示，本輪刻意未放寬）`T3` 現在 FAIL**：`POST /storyboard/build`（e01s03）
-   回 400「補鏡結果新增了契約錯誤，未寫檔：第 5 鏡：role=establish 只能用在場次第一鏡（合約 V5）」。
-   根因不是補洞鏡：`storyboard.backfill_shots` 開頭會把整份 `shots` 重排（依場次、再依
-   「第一個 beat 在劇本的位置」，沒有 beatIds 的排場次最前面），母本 e01s01 的未連動手動鏡
-   sh25–sh28 原本排在場次**最後**，重排後移到場次**最前面**，sh01 的 establish 因此變成第 5 鏡。
-   `chain == want` 不受影響（e01s01 仍是 b01..b04）。F2 之前這條被降級成 warn 蓋住了。
-   兩個可能方向（未動）：(a) 重排時保留「沒有 beatIds 的既有鏡」在原相對位置，或把它們
-   排到場次最後；(b) V5 的第一鏡認定改成「第一支有 beatIds 的鏡」（校驗與排序共用同一條定義）。
-   **`python tools/handoff.py check m16-live-link` 目前 rc=1，唯一問題是
-   「PLAN.md 找不到里程碑『M16』」——PLAN.md 的 M16 列依指示由主代理補，補完即 0 個問題。**
+1. ~~`T3` FAIL 的 `backfill_shots()` 排序漏洞~~ **已修（`f632f3d`）**：`_key()` 原本讓沒有
+   `beatIds` 的既有鏡吃 `pos=-1`（排場次最前面），母本 e01s01 的 sh25–sh28 因此從 no=5…8
+   跳到 no=1…4、`sh01(establish)` 變第 5 鏡 → V5 error → `POST /storyboard/build` 回 400。
+   現在無有效 beatIds 的鏡整組排在該場次有 beatIds 的鏡之後、組內依 `orig_order`。
+   實測：`backfill_shots(d, ['e01s03'])` → created=`['sh29']`（插在 sh10 之後、no=15）、
+   28 支既有鏡 index 序列同序、e01s01 sh01–sh04 維持 no=1…4、sh25–sh28 維持 no=5…8；
+   `validate` error 5 → 3（消掉 e01s03 V1 順序與 sh01 establish V5 兩條），
+   剩下 wide 取景／sh10 reaction 含台詞／sh06 V4 三條皆為母本既有資料問題。
+   `python tools/handoff.py check m16-live-link` 只剩「PLAN.md 找不到里程碑『M16』」，
+   PLAN.md 的 M16 列依指示由主代理補，補完即 0 個問題。
 2. 瘦身 PUT（`scripts/test_live_linkage.py` 的 `slim_project`）只帶分鏡決策欄位，某些鏡頭的
    編譯稿在 PUT 後會改變，於是存檔端把它們判成手寫稿並保全原值——這是「無法證明等於編譯稿
    就保全」的正確行為，不是 bug；但 T9 因此改用裸 `storage.save_project` 驗，不走 PUT。
@@ -61,7 +66,10 @@ cd "C:/Users/user/Desktop/hermes work/1117-wt-m16-live"
 "../1117/.venv/Scripts/python.exe" scripts/test_live_linkage.py --no-ui    # 略過 T6
 ```
 
-目前結果：T1、T2、T4–T10 PASS；T3 FAIL（原因見「未完成 1」）。
+目前結果：T1–T11 全線 PASS（含 T6 前端）。T3 的數字：步驟① 補 b05 → created=`['sh29']`；
+步驟② e01s03 插 b99 → `mode=backfill`、created=`['sh30']`、`uncoveredBeats` 清空、
+既有 29 鏡 `beatIds` 一字不動、無重複引用、無 V5 降級；T11：28 支既有鏡同序、
+sh25–sh28 全在有 beatIds 的 sh01–sh04 之後、sh01 仍是 e01s01 第一支有 beatIds 的鏡。
 另：`python tools/check_agent_doc.py` rc=0、`python -m compileall app tools` 與
 `node --check static/app.js` 全過。
 
