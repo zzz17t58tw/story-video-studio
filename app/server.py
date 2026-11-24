@@ -789,12 +789,17 @@ def api_prompt_preview(slug: str, shot_id: str, engine: str = Query("h3_video"))
         problems = ref_problems + list(problems)
         ok = not problems
     elif eng == "moss_t2i":
-        prompt, warnings = imagegen.build_moss_caption(data, shot)
-        ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot))
+        # v0.9.21：預覽要跟送件口走同一道（機械判定＋自動轉化），不能一個顯示原文、一個送轉化版
+        _r = promptrules.finalize(eng, data, shot,
+                                  candidate=imagegen.build_moss_caption(data, shot)[0])
+        prompt = _r["prompt"]
+        warnings.extend(_r["warnings"])
+        ok, problems, notes = True, [], []
+        source = _r["source"]
     else:
         refs, w = imagegen.collect_refs(data, shot)
         warnings.extend(w)
-        prompt, w2 = imagegen.build_prompt(data, shot, refs)
+        prompt, w2, _ps2 = imagegen.build_prompt(data, shot, refs)
         warnings.extend(w2)
         ok, problems, notes = promptrules.check(eng, prompt, promptrules.ctx_for(eng, data, shot, refs=refs))
         source = "build_prompt"

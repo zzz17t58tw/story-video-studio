@@ -370,27 +370,37 @@ def build_prompt(project: dict, shot: dict, refs: list[dict]) -> tuple[str, list
     if has_pic_refs:
         bad = [n for n in pic_refs if n not in mapping]
         if bad:
-            # M12b：規則只在 app/promptrules.py 寫一份；這裡只借用它把「缺什麼」講成中文
-            _ok, problems, _notes = promptrules.check("qwen_image", base, {
-                "refsCount": len(refs), "mode": "ref" if refs else "t2i",
-                "slotOrdinals": list(mapping)})
-            alt = ("參照補救：" + "；".join(problems)) if problems else ""
-            raise ImageGenError(
+            # v0.9.21：不再擋人——機械移除對不到的槽位引用後照送（使用者定調：品質掉了要看得見，
+            # 但不要讓非技術使用者卡在「生不出來」）
+            fixed, did = promptrules.sanitize_qwen(base, len(refs), mapping)
+            warnings.append(
                 f"提示詞引用了 {', '.join(f'<Picture {n}>' for n in bad)}，但這次只送 {len(refs)} 張參考圖"
-                f"（對應的槽位{'已超上限被略過' if len(refs) >= MAX_REF_IMAGES else '沒有圖／檔案不存在'}）："
-                "請按「▣ 建參考圖槽位」修正槽位，或「⌘ 模板編譯 prompt」重編提示詞後再試（硬送會讓模型認錯主體）"
-                + (f"（Qwen 官方規則：{alt}）" if alt else ""))
-        prompt = _PIC_RE.sub(lambda m: f"<image{mapping[int(m.group(1))]}>", base).strip()
+                f"（{'已超上限被略過' if len(refs) >= MAX_REF_IMAGES else '沒有圖／檔案不存在'}）"
+                f"；已自動轉化：{'、'.join(did) or '移除對不到的引用'}")
+            base = fixed or base
+        prompt = _PIC_RE.sub(
+            lambda m: f"<image{mapping[int(m.group(1))]}>" if int(m.group(1)) in mapping else "",
+            base).strip()
     else:
         prompt = base
-    # M12b：送件前硬驗（Qwen 官方槽位規則）——不合格就擋，不默默送進模型
-    ok, problems, notes = promptrules.check("qwen_image", prompt, {
-        "refsCount": len(refs), "mode": "ref" if refs else "t2i",
-        "slotOrdinals": list(mapping)})
+    # v0.9.21：送件前機械判定；不合規先轉化，轉不動就照送並標明（絕不擋）
+    qctx = {"refsCount": len(refs), "mode": "ref" if refs else "t2i",
+            "slotOrdinals": list(mapping)}
+    ok, problems, notes = promptrules.check("qwen_image", prompt, qctx)
     warnings.extend(notes)
+    prompt_source = "as-is"
     if not ok:
-        raise ImageGenError("提示詞未符合 Qwen Image 2.1 官方規則，已擋下（沒有送 GPU）：\n- "
-                            + "\n- ".join(problems))
+        fixed, did = promptrules.sanitize_qwen(prompt, len(refs), mapping)
+        ok2, _p2, n2 = promptrules.check("qwen_image", fixed, qctx) if fixed else (False, [], [])
+        if fixed and ok2:
+            prompt = fixed
+            prompt_source = "sanitized"
+            warnings.extend(n2)
+            warnings.append("提示詞未符合 Qwen 官方規則（" + "；".join(problems[:3])
+                            + "），已自動轉化：" + "、".join(did))
+        else:
+            warnings.append("提示詞未符合 Qwen 官方規則（" + "；".join(problems[:3])
+                            + "），已照送（品質可能受影響；建議按「⌘ 模板編譯 prompt」重編）")
 
     if not refs:
         warnings.append("這次沒有送任何參考圖（i2i 會失敗；若要純文字生圖請選 t2i）")
@@ -405,7 +415,7 @@ def build_prompt(project: dict, shot: dict, refs: list[dict]) -> tuple[str, list
                   "Compose a single cinematic film still. Keep faces, hair, body shape and costume identical "
                   "to the reference images; relight and re-stage the scene as described below. No text, no watermark.\n\n"
                   + prompt)
-    return prompt, warnings
+    return prompt, warnings, prompt_source
 
 
 # ── 2b. 前置檢查（避免白跑 GPU）──────────────────────────────────
@@ -1101,13 +1111,24 @@ def _generate_moss_image_impl(project: dict, shot: dict, opts: dict) -> dict:
     # M12b：送件前硬驗 MOSS 官方 caption 規則（連續英文、不編號、禁 quality tag、不含 <Picture、
     # 尺寸不進 caption）——硬性違規就擋；錨點沒逐字／caption 偏長只警告（實測幾乎都會超長，
     # 而且特寫鏡頭組稿刻意不放臉部錨點，擋下來等於整個引擎不能用）。
-    _ok, problems, notes = promptrules.check("moss_t2i", caption,
-                                             promptrules.ctx_for("moss_t2i", project, shot))
+    # v0.9.21：機械判定 → 不合規就自動轉化成 MOSS 官方格式（使用者定調：不擋人，但品質要說清楚）
+    mctx = promptrules.ctx_for("moss_t2i", project, shot)
+    _ok, problems, notes = promptrules.check("moss_t2i", caption, mctx)
     warnings.extend(notes)
-    if not problems and not _ok:
-        problems = ["caption 不符合 MOSS 官方標題格式"]
-    if problems:
-        raise ImageGenError("MOSS caption 未符合官方規則，已擋下（沒有送 GPU）：\n- " + "\n- ".join(problems))
+    caption_source = "built"
+    if not _ok:
+        fixed, did = promptrules.sanitize_moss(caption)
+        ok2, _p2, n2 = promptrules.check("moss_t2i", fixed, mctx) if fixed else (False, [], [])
+        if fixed and ok2:
+            caption = fixed
+            caption_source = "sanitized"
+            warnings.append("MOSS caption 未符合官方格式（" + "；".join(problems[:3])
+                            + "），已自動轉化：" + "、".join(did))
+            warnings.extend(n2)
+        else:
+            caption_source = "as-is"
+            warnings.append("MOSS caption 未符合官方格式（" + "；".join(problems[:3])
+                            + "），已照送（品質可能受影響；建議到人物卡補 identityAnchors 後再生）")
 
     try:
         seed = int(opts.get("seed")) if opts.get("seed") not in (None, "") else random.randint(0, 2 ** 31 - 1)
@@ -1184,6 +1205,7 @@ def _generate_moss_image_impl(project: dict, shot: dict, opts: dict) -> dict:
         "seed": seed, "resolution": final_w, "steps": steps, "cfg": cfg,
         "size": {"width": final_w, "height": final_h},
         "refs": [], "prompt": caption, "promptChars": len(caption), "prevFirst": prev_first,
+        "promptRule": "moss_t2i", "promptSource": caption_source,
         "loaders": loaders, "attempts": attempts,
     }
 
@@ -1241,7 +1263,7 @@ def _generate_shot_image_impl(project: dict, shot_id: str, opts: dict) -> dict:
         warnings.append(f"ComfyUI 可用 VRAM 只剩 {info['vramFreeMB']} MB，可能很慢或失敗（可先關掉其他吃 GPU 的程式）")
 
     refs: list[dict] = pre_refs if mode == "ref" else []
-    prompt, w = build_prompt(project, shot, refs)
+    prompt, w, prompt_source = build_prompt(project, shot, refs)
     warnings.extend(w)
 
     try:
@@ -1306,6 +1328,7 @@ def _generate_shot_image_impl(project: dict, shot_id: str, opts: dict) -> dict:
         "seed": seed, "resolution": resolution, "steps": steps, "cfg": cfg,
         "refs": [{"path": r["path"], "label": r["label"]} for r in refs],
         "prompt": prompt, "promptChars": len(prompt), "prevFirst": prev_first,
+        "promptRule": "qwen_image", "promptSource": prompt_source,
     }
 
 
@@ -1388,6 +1411,24 @@ def _generate_character_sheet_impl(project: dict, cid: str, opts: dict) -> dict:
     warnings: list[str] = []
     caption, cw = build_character_sheet_caption(project, ch)
     warnings.extend(cw)
+    # v0.9.21：立繪同樣是「生成送出前」的關卡，走同一道機械判定＋轉化
+    s_rule = "qwen_image" if engine == "qwen" else "moss_t2i"
+    s_ctx = ({"refsCount": 0, "mode": "t2i", "slotOrdinals": []} if s_rule == "qwen_image"
+             else {"anchorGroups": [], "maxChars": 2000})
+    _sok, _sprobs, _snotes = promptrules.check(s_rule, caption, s_ctx)
+    warnings.extend(_snotes)
+    if not _sok:
+        _sfixed, _sdid = (promptrules.sanitize_qwen(caption, 0, {}) if s_rule == "qwen_image"
+                          else promptrules.sanitize_moss(caption))
+        _sok2, _sp2, _sn2 = promptrules.check(s_rule, _sfixed, s_ctx) if _sfixed else (False, [], [])
+        if _sfixed and _sok2:
+            caption = _sfixed
+            warnings.extend(_sn2)
+            warnings.append("立繪 caption 未符合官方格式（" + "；".join(_sprobs[:3])
+                            + "），已自動轉化：" + "、".join(_sdid))
+        else:
+            warnings.append("立繪 caption 未符合官方格式（" + "；".join(_sprobs[:3])
+                            + "），已照送（品質可能受影響）")
     try:
         seed = int(opts.get("seed")) if opts.get("seed") not in (None, "") else random.randint(0, 2 ** 31 - 1)
     except (TypeError, ValueError):

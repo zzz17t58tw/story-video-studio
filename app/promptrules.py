@@ -48,6 +48,13 @@ _H3_SEG_RE = re.compile(
 _H3_SEG_NAMES = ("1 主體定義", "2 動作摘要", "3 鏡頭語言", "4 詳細描述", "5 氛圍與現場聲", "6 音訊")
 # MOSS：caption 風格，禁「1. Subject:」這種影片模型格式與 quality tag
 _MOSS_NUMBERED_RE = re.compile(r"(?im)^\s*([1-9])[.、]\s*[A-Z]")
+# v0.9.21：清洗「1. Subject:」這種整段標題用（上面的 _MOSS_NUMBERED_RE 只吃得到開頭兩個字元，
+# 直接拿它做替換會留下「ubject:」）
+_MOSS_HEAD_RE = re.compile(
+    r"(?im)^\s*\d+[.、]\s*(?:subject\s+definitions?|subject|summary|retention\s+analysis"
+    r"(?:\s*/\s*camera)?|camera|detailed\s+description|overall\s+soundscape|soundscape|"
+    r"non-diegetic\s+audio|action|主體定義|摘要|鏡頭語言|詳細描述|氛圍與現場聲|音訊)"
+    r"\s*[:：]?\s*")
 _MOSS_QUALITY = ("masterpiece", "best quality", "high quality", "top quality", "8k", "4k", "uhd",
                  "ultra detailed", "ultra-detailed", "highly detailed", "high detail",
                  "award winning", "award-winning", "trending on artstation", "hdr", "best detail")
@@ -246,7 +253,7 @@ def _build_qwen(project: dict, shot: dict, **kw: Any) -> tuple[str, list[str], d
         refs, cw = imagegen.collect_refs(project, shot)
     else:
         cw = []
-    prompt, warnings = imagegen.build_prompt(project, shot, refs)
+    prompt, warnings, _ps = imagegen.build_prompt(project, shot, refs)
     return prompt, list(cw) + list(warnings), {"refsCount": len(refs)}
 
 
@@ -353,3 +360,129 @@ def prepare(engine: str, project: dict, obj: dict, **kw: Any) -> tuple[str, list
     if not ok:
         warnings.append(f"提示詞未符合「{rule['label']}」官方規則，缺：" + "；".join(problems))
     return prompt, warnings, rule["id"]
+
+
+# ── v0.9.21：送出口的機械轉化器（使用者定調的「最硬條件」）──────────
+# 使用者原話（2026-11-24）：「每個生成底模都有官方的提示詞規則與符號必須一致，
+# 所以目前有三隻生成底模必須在生成送出的最後一個關卡前轉化成符合底模的規則。
+# 這是最硬條件，寫在後端機械判定。不合規則的提示詞一樣可以餵模型生成，不會報錯。
+# 但是生成品質嚴重影響。」
+# → 所以送件口**不擋人**（擋下去非技術使用者會卡死），而是先機械修正成合規格式，
+#   修不了才改用官方組稿，並把「改了什麼」寫進 warnings 讓畫面看得見。
+def sanitize_moss(caption: str) -> tuple[str, list[str]]:
+    """把 caption 清成 MOSS 官方格式：去編號分段、去 quality tag、去 <Picture、去尺寸。"""
+    text = _s(caption)
+    did: list[str] = []
+    if not text:
+        return "", did
+    new = _MOSS_HEAD_RE.sub("", text)
+    if new == text:
+        new = _MOSS_NUMBERED_RE.sub("", text)
+    if new != text:
+        did.append("移除編號分段（那是 H3 的六段式寫法）")
+        text = new
+    low = text.lower()
+    hits = [q for q in _MOSS_QUALITY
+            if re.search(rf"(?<![a-z0-9]){re.escape(q)}(?![a-z0-9])", low)]
+    if hits:
+        for q in hits:
+            text = re.sub(rf"(?<![a-z0-9]){re.escape(q)}(?![a-z0-9])[,，.]?\s*", "", text, flags=re.I)
+        did.append("移除 quality tag：" + "、".join(hits))
+    if re.search(r"<picture\s*\d*>", text, flags=re.I):
+        text = re.sub(r"<picture\s*\d*>\s*[,，.]?\s*", "", text, flags=re.I)
+        did.append("移除 <Picture N>（MOSS 不吃參考圖槽位）")
+    m = _MOSS_SIZE_RE.search(text)
+    if m:
+        text = _MOSS_SIZE_RE.sub("", text)
+        did.append(f"移除尺寸／比例「{m.group(0)}」（尺寸由程式指定畫布）")
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"([,，])\s*[,，]+", r"\1", text)
+    text = re.sub(r"\s+([,，.。])", r"\1", text).strip(" ,，.")
+    return text, did
+
+
+def sanitize_qwen(prompt: str, refs_count: int, mapping: dict | None = None) -> tuple[str, list[str]]:
+    """把提示詞修成 Qwen 官方槽位寫法：`<Picture N>` → `<imageK>`；超範圍 `<imageK>` 移除。"""
+    text = _s(prompt)
+    did: list[str] = []
+    if not text:
+        return "", did
+    mapping = {int(k): int(v) for k, v in (mapping or {}).items()}
+
+    def _rep_pic(m: re.Match) -> str:
+        k = mapping.get(int(m.group(1)))
+        return f"<image{k}>" if k else ""
+
+    new = _PIC_RE.sub(_rep_pic, text)
+    if new != text:
+        did.append("把 <Picture N> 換成 Qwen 的 <imageK> 槽位（對不到的在這次送出的圖裡就移除）")
+        text = new
+
+    def _rep_img(m: re.Match) -> str:
+        k = int(m.group(1))
+        return m.group(0) if 1 <= k <= int(refs_count) else ""
+
+    new = re.sub(r"<image\s*(\d+)>", _rep_img, text, flags=re.I)
+    if new != text:
+        did.append(f"移除超範圍的 <imageK>（這次只送 {refs_count} 張參考圖）")
+        text = new
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text, did
+
+
+def finalize(engine: str, project: dict, obj: dict, candidate: str | None = None,
+             **kw: Any) -> dict:
+    """送出口唯一入口：機械判定 → 不合規就自動轉化 → 回可直接送模型的提示詞。
+
+    回 {prompt, source, ruleId, warnings, converted, problems}：
+      source = original（原本就合規）／sanitized（機械修正後合規）／built（改用官方組稿）
+      converted = 這次做了哪些改寫（中文，顯示給使用者）
+      problems = 原本的違規條目（要有紀錄，別讓品質掉了沒人知道）
+
+    轉化順序：①機械清洗（sanitize_*）②官方組稿（rule["build"]）。
+    兩步都修不乾淨時**照送**並在 warnings 標明——絕不讓使用者卡在「生不出來」。
+    """
+    rule = rule_of(engine)
+    if rule is None:
+        raise ValueError(f"不認得的引擎 {engine}（合法值：{'／'.join(RULES)}）")
+    ctx = kw.get("ctx") or ctx_for(rule["id"], project, obj, **kw)
+    label = rule["label"]
+    cand = _s(candidate)
+
+    if cand:
+        ok, problems, notes = rule["check"](cand, ctx)
+        if ok:
+            return {"prompt": cand, "source": "original", "ruleId": rule["id"],
+                    "warnings": list(notes), "converted": [], "problems": []}
+        if rule["id"] == "moss_t2i":
+            fixed, did = sanitize_moss(cand)
+        elif rule["id"] == "qwen_image":
+            fixed, did = sanitize_qwen(cand, int(ctx.get("refsCount") or 0), kw.get("mapping"))
+        else:
+            fixed, did = "", []
+        if fixed:
+            ok2, p2, n2 = rule["check"](fixed, ctx)
+            if ok2:
+                return {"prompt": fixed, "source": "sanitized", "ruleId": rule["id"],
+                        "warnings": [f"未符合「{label}」官方規則（{'；'.join(problems[:3])}）"
+                                     f"，已自動轉化：{'、'.join(did)}"] + list(n2),
+                        "converted": did, "problems": problems}
+        built, bwarn, _meta = rule["build"](project, obj, **kw)
+        built = _s(built)
+        ok3, p3, n3 = rule["check"](built, ctx)
+        warnings = [f"未符合「{label}」官方規則（{'；'.join(problems[:3])}），"
+                    "已改用官方規則重新組稿再送出。"]
+        warnings += list(bwarn) + list(n3)
+        if not ok3:
+            warnings.append("轉化後仍有未符合項目（照送，品質可能受影響）：" + "；".join(p3))
+        return {"prompt": built, "source": "built", "ruleId": rule["id"],
+                "warnings": warnings, "converted": did + ["改用官方組稿"], "problems": problems}
+
+    built, bwarn, _meta = rule["build"](project, obj, **kw)
+    built = _s(built)
+    ok, problems, notes = rule["check"](built, ctx)
+    warnings = list(bwarn) + list(notes)
+    if not ok:
+        warnings.append("官方組稿仍有未符合項目（照送）：" + "；".join(problems))
+    return {"prompt": built, "source": "built", "ruleId": rule["id"],
+            "warnings": warnings, "converted": [], "problems": problems}
