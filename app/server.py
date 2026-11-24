@@ -129,14 +129,6 @@ def api_create_project(body: CreateProjectBody):
     }
 
 
-@app.get("/api/projects/{slug}")
-def api_get_project(slug: str):
-    try:
-        return {"ok": True, "project": _project_with_derived(slug)}
-    except StorageError as e:
-        return _fail(404, str(e))
-
-
 @app.put("/api/projects/{slug}")
 async def api_put_project(slug: str, request: Request):
     try:
