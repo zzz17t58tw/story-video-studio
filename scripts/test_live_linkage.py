@@ -1,4 +1,4 @@
-"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T12，逐條印 PASS/FAIL 與實測數字。
+"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T13，逐條印 PASS/FAIL 與實測數字。
 
 規格：docs/shots-live-linkage.md §6／§8.3。**只在複本上跑**，絕不寫 dist/StoryVideoStudio/projects 正本。
 
