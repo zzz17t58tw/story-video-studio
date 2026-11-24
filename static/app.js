@@ -3229,9 +3229,12 @@ function m3dShotTools(sh) {
       status.textContent = "已寫回 promptEn。";
       // 編譯是使用者主動要求「用模板覆蓋」：手寫稿旗標要一起收掉，否則存檔端會把手寫稿
       // 判成「落後」並在卡片上一直掛警語（編譯結果＝現算值，本來就不是手改稿）。
+      // P3：後端寫回時已清掉 promptEnManual／promptAdoptedManual（回應帶 promptManualCleared），
+      // 這裡同步本地狀態，免得下一次 saveNow() 又把舊旗標帶回存檔端。
       sh.promptEnManual = false;
+      delete sh.promptAdoptedManual;
       if (sh.derived && typeof sh.derived === "object") {
-        sh.derived.promptSource = "compiled";
+        sh.derived.promptSource = res.promptSource || "compiled";
         sh.derived.promptEnStale = false;
         sh.derived.adoptedManual = false;
       }

@@ -544,13 +544,22 @@ def api_apply_bulk(slug: str, body: BulkBody):
 # ── M3d：referencePlan / 確定性 prompt 編譯 / 全專案機械校驗 ────────
 # 全部純邏輯，不呼叫任何模型；結果會寫回 project.json（compile 寫 promptEn）。
 def _load_for_m3d(slug: str):
-    """回 (data, None) 或 (None, 錯誤回應)。找不到專案 → 404 中文。"""
+    """回 (data, None) 或 (None, 錯誤回應)。找不到專案 → 404 中文。
+
+    M16a（P1）：讀進來就**在記憶體上**重算衍生值（referencePlan／promptEn／derived／孤兒判定），
+    跟 `GET /api/projects/{slug}` 走同一個出口邏輯。為什麼：磁碟上的 `derived` 可能不存在
+    （乾淨複本／舊專案）或已過期，只讀快照會讓 `/storyboard` 的 `orphanShotIds` 恆為空、
+    前端「移除本場未連動的鏡頭」按鈕永遠不出現。**不寫檔**——要寫的端點自己 save_project，
+    而 save_project 存檔前也會再算一次同樣的衍生值（所以寫回的字與這裡算的一致）。
+    """
     try:
         data = storage.load_project(slug)
     except StorageError as e:
         msg = str(e)
         return None, _fail(404 if msg.startswith("找不到專案") else 400, msg)
-    return storage.fill_project_defaults(data), None
+    data = storage.fill_project_defaults(data)
+    h3compose.refresh_derived(data)   # 永不 raise；單鏡失敗記在該鏡 derived.error
+    return data, None
 
 
 def _get_shot(data: dict, shot_id: str):
@@ -595,11 +604,18 @@ def api_compile_prompt(slug: str, shot_id: str):
     if not prompt.strip():
         return _fail(400, "編譯結果是空的（鏡頭沒有角色、場景、動作可用）")
     shot["promptEn"] = prompt
+    # P3：使用者主動按「模板編譯」＝選擇編譯稿，手寫旗標（含「採認來的」紀錄）要一起收掉。
+    # 否則 promptEnManual 留在鏡頭上，之後改 beats 永遠不會更新這鏡，卡片也一直掛手動稿警語。
+    manual_cleared = (shot.pop("promptEnManual", None) is True
+                      or shot.pop("promptAdoptedManual", None) is True)
     try:
         storage.save_project(slug, data)
     except StorageError as e:
         return _fail(400, f"寫回專案失敗：{e}")
-    return {"ok": True, "shotId": shot_id, "promptEn": prompt, "warnings": warnings, "meta": meta}
+    saved = _get_shot(storage.load_project(slug), shot_id) or {}
+    return {"ok": True, "shotId": shot_id, "promptEn": prompt, "warnings": warnings, "meta": meta,
+            "promptManualCleared": manual_cleared,
+            "promptSource": (saved.get("derived") or {}).get("promptSource")}
 
 
 class ValidateBody(BaseModel):

@@ -954,6 +954,11 @@ def refresh_derived(project: dict) -> dict:
                 sh["dialogLineRefs"] = []
             # D2 promptEn（三段判定：手改稿保護）
             stored = _s(sh.get("promptEn"))
+            # 採認旗標持久化在**鏡頭本體**（P2）：`shot.promptAdoptedManual=true` 記住「這份字是
+            # 舊版無旗標手改稿、被衍生流程採認保全的」。只靠 derived.adoptedManual 的話第二輪
+            # 因為 promptEnManual 已為 true 而走①分支 → adopted=False → 前端把「舊版手改稿已保留」
+            # 顯示成「已同步」。使用者按「模板編譯」時由該端點清掉這個旗標。
+            adopted_mark = sh.get("promptAdoptedManual") is True
             manual = sh.get("promptEnManual") is True
             auto = (not manual) and (
                 _s(sh.get("derivedFrom")) in PROMPT_AUTO_SOURCES or not stored)
@@ -967,12 +972,15 @@ def refresh_derived(project: dict) -> dict:
             adopted = False
             if manual:
                 fresh = stored                                  # ① 手寫稿（有旗標）
+                adopted = adopted_mark                          # 是不是「採認來的」由本體旗標決定
             elif not stored or stored == compiled or deploy_draft:
                 fresh = compiled                                # ③ 空／同值／部署短草稿 → 重算
                 sh["promptEn"] = compiled
+                sh.pop("promptAdoptedManual", None)             # 已是編譯稿：採認紀錄作廢
             else:
                 # ② 非空、與編譯稿不同、且沒有旗標 → 舊版前端改的字：採認為手寫稿並保全
                 sh["promptEnManual"] = True
+                sh["promptAdoptedManual"] = True
                 fresh = stored
                 adopted = True
             new_source = _prompt_source_of(sh)

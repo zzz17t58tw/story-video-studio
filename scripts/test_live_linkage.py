@@ -1,16 +1,17 @@
-"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T11，逐條印 PASS/FAIL 與實測數字。
+"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T12，逐條印 PASS/FAIL 與實測數字。
 
-規格：docs/shots-live-linkage.md §6。**只在複本上跑**，絕不寫 dist/StoryVideoStudio/projects 正本。
+規格：docs/shots-live-linkage.md §6／§8.3。**只在複本上跑**，絕不寫 dist/StoryVideoStudio/projects 正本。
 
 用法（Windows git-bash，repo 根目錄）：
     python scripts/test_live_linkage.py                 # 全部（含 T6 前端）
     python scripts/test_live_linkage.py --no-ui         # 跳過 T6（沒有 Chrome / 不想開瀏覽器）
     python scripts/test_live_linkage.py --only T3,T5
+    SVS_TEST_PORT=8795 python scripts/test_live_linkage.py   # 8790 被占時換埠
 
 它會自己：
   1. 把 dist 的 28 鏡母本複製到 %TMP%\\svs-m16-live\\projects\\<slug>（每次重跑前刪掉重複）
   2. 用 repo 的 .venv python 起一個 dev 實例（埠 8790，SVS_DATA_DIR 指向複本）
-  3. 走真的 HTTP API 做 T1–T5、T8；T7 跑 compileall／node --check；
+  3. 走真的 HTTP API 做 T1–T5、T8–T12；T7 跑 compileall／node --check；
      T6 起 headless Chrome（CDP）切到鏡頭頁，逐卡比對顯示的 prompt 長度與 GET 回的值。
 """
 
@@ -565,8 +566,31 @@ def t7() -> None:
 
 # ── T8：不退化（批次生影片 precheck 全放行、預覽字 == 送件字）────────
 def t8() -> None:
+    """不退化：28 鏡複本，批次生影片 precheck 全放行、預覽字 == 送件字。
+
+    P4（測試不穩定）：T8 以前靠 `fresh_copy()` 共用複本、再 `save(project())` 存的**瘦身副本**。
+    瘦身 PUT 只帶分鏡決策欄位（`slim_project`），`referencePlan` 等衍生值全靠 save 端重算——
+    只要某次 `referencePlan` 沒被重算出來（殘留空 `slots`），28 鏡就全被判「沒有可用參考圖」，
+    `build_timeline` 全拋 H3GenError → 預覽與送件 0/28、第一次跑必 FAIL、第二次才過。
+    現在 T8 自己建**獨立複本**並先把槽位重建好（`build-reference-plan` 逐鏡寫回），
+    前置不成立就直接斷言失敗（不偷偷放寬），所以連跑兩次結果一致。
+    """
     fresh_copy()
     save(project())              # 先存一次：讓 derived 重算生效（等同使用者做完編輯的狀態）
+    # 槽位前置：逐鏡重建 referencePlan（等同使用者在鏡頭頁按過一輪「建槽位」）
+    shs = list(shots_by_id(project()).keys())
+    zero = []
+    for sid in shs:
+        code_r, rr = http("POST", f"/api/projects/{SLUG}/shots/{sid}/build-reference-plan")
+        if code_r != 200:
+            zero.append(f"{sid} build-reference-plan {code_r}")
+            continue
+        if not (rr.get("referencePlan") or {}).get("slots"):
+            zero.append(f"{sid} 槽位 0")
+    if zero:
+        record("T8 批次生影片 precheck 全放行＋prompt-preview == build_timeline segments[0].prompt", False,
+               f"前置不成立：逐鏡重建槽位後仍有 {len(zero)} 鏡沒有槽位 → {zero[:4]}")
+        return
     env = dict(os.environ, SVS_DATA_DIR=str(WORK_PROJECTS), PYTHONIOENCODING="utf-8")
     code = r"""import json, sys
 from app import storage, h3gen
@@ -600,7 +624,7 @@ print(json.dumps({"blocked": blocked, "total": len(ids)}, ensure_ascii=False))
             cmp_bad.append(f"{sh['id']} 預覽 {len(pv.get('prompt') or '')} 字 ≠ 送件 {len(seg or '')} 字")
     ok = not pre["blocked"] and not cmp_bad and pre["total"] == 28
     record("T8 批次生影片 precheck 全放行＋prompt-preview == build_timeline segments[0].prompt", ok,
-           f"precheck 放行 {pre['total'] - len(pre['blocked'])}/{pre['total']} 鏡；"
+           f"槽位前置 28/28 鏡重建成功；precheck 放行 {pre['total'] - len(pre['blocked'])}/{pre['total']} 鏡；"
            f"預覽與送件逐字相等 {pre['total'] - len(cmp_bad)}/{pre['total']} 鏡"
            + (f"；問題：{pre['blocked'][:2]} {cmp_bad[:3]}" if (pre["blocked"] or cmp_bad) else ""))
 
@@ -684,11 +708,29 @@ if same_sid:
     out["sameKept"] = str(s2.get("promptEn") or "") == stext
     out["sameFlag"] = s2.get("promptEnManual") is True
     out["sameAdopted"] = (s2.get("derived") or {}).get("adoptedManual") is True
-# 再存一次：已保全的稿子第二輪不得被改
-p2 = storage.load_project(SLUG)
-storage.save_project(SLUG, p2)
-out["again"] = str(({s["id"]: s for s in storage.load_project(SLUG)["shots"]}.get(manual_sid) or {})
-                   .get("promptEn") or "")
+# 再存兩次（連存三次）：已保全的稿子每一輪都不得被改、adoptedManual 不得掉（P2）
+saves = [{"n": 1, "manual": str(t.get("promptEn") or ""), "len": len(str(t.get("promptEn") or "")),
+          "flag": t.get("promptEnManual") is True, "adopted": d.get("adoptedManual") is True,
+          "sh10": str((shs.get("sh10") or {}).get("promptEn") or ""),
+          "sh07flag": (shs.get("sh07") or {}).get("promptEnManual") is True,
+          "sh07adopted": ((shs.get("sh07") or {}).get("derived") or {}).get("adoptedManual") is True}]
+for i in (2, 3):
+    storage.save_project(SLUG, storage.load_project(SLUG))
+    cur = {s["id"]: s for s in storage.load_project(SLUG)["shots"]}
+    ct, c10, c07 = cur.get(manual_sid) or {}, cur.get("sh10") or {}, cur.get("sh07") or {}
+    saves.append({"n": i, "manual": str(ct.get("promptEn") or ""), "len": len(str(ct.get("promptEn") or "")),
+                  "flag": ct.get("promptEnManual") is True,
+                  "adopted": (ct.get("derived") or {}).get("adoptedManual") is True,
+                  "sh10": str(c10.get("promptEn") or ""),
+                  "sh07flag": c07.get("promptEnManual") is True,
+                  "sh07adopted": (c07.get("derived") or {}).get("adoptedManual") is True})
+out["saves"] = [{"n": x["n"], "len": x["len"], "flag": x["flag"], "adopted": x["adopted"],
+                 "sh10len": len(x["sh10"]), "sh07flag": x["sh07flag"], "sh07adopted": x["sh07adopted"]}
+                for x in saves]
+out["threeStable"] = all(x["len"] == out["manualLen"] and x["flag"] and x["adopted"]
+                         and x["sh10"] == str((raw.get("sh10") or {}).get("promptEn") or "")
+                         and not x["sh07flag"] and not x["sh07adopted"] for x in saves)
+out["again"] = saves[-1]["manual"]
 print(json.dumps(out, ensure_ascii=False))
 """ % SLUG
     r = subprocess.run([str(PY), "-c", code], cwd=str(REPO), env=env, capture_output=True, text=True)
@@ -696,15 +738,18 @@ print(json.dumps(out, ensure_ascii=False))
     o = json.loads(r.stdout.strip().splitlines()[-1])
     ok = (bool(o["manualSid"]) and o.get("manualKept") and o.get("manualFlag") and o.get("adopted")
           and o.get("source") == "manual" and o.get("stale") and o.get("chars") == o["manualLen"]
-          and o.get("sh10IsManualCand") and o.get("sh10Kept")
+          and o.get("sh10IsManualCand") and o.get("sh10Kept") and o.get("threeStable")
           and o.get("again") == str((disk_shots().get(o["manualSid"]) or {}).get("promptEn") or "")
           and (not o["sameSid"] or (o.get("sameKept") and not o.get("sameFlag")
                                     and not o.get("sameAdopted"))))
-    record("T9 舊版手改稿（非空／無旗標／≠compiled）存檔後一字不動，同值非手動", ok,
+    sv = "；".join(f"第{x['n']}次 手改鏡 {x['len']} 字/flag={x['flag']}/adopted={x['adopted']}、"
+                  f"sh10 {x['sh10len']} 字、sh07 flag={x['sh07flag']}/adopted={x['sh07adopted']}"
+                  for x in o.get("saves") or [])
+    record("T9 舊版手改稿（非空／無旗標／≠compiled）存檔後一字不動，同值非手動（連存三次穩定）", ok,
            f"手改稿鏡 {o['manualSid']}：{o['manualLen']} 字 → {o.get('manualAfter')} 字、逐字相同={o.get('manualKept')}、"
            f"promptEnManual={o.get('manualFlag')}、adoptedManual={o.get('adopted')}、"
            f"promptSource={o.get('source')}、promptEnStale={o.get('stale')}、"
-           f"derived.promptChars={o.get('chars')}；存第二次仍為同一份={o.get('again') == str((disk_shots().get(o['manualSid']) or {}).get('promptEn') or '')}；"
+           f"derived.promptChars={o.get('chars')}；連存三次穩定={o.get('threeStable')}（{sv}）；"
            f"sh10 {o.get('sh10Len')} 字 → {o.get('sh10After')} 字、逐字相同={o.get('sh10Kept')}；"
            f"對照鏡（非空＝compiled）{o['sameSid'] or '（母本無此鏡）'}：{o['sameLen']} 字 → {o.get('sameAfter')} 字、"
            f"維持原值={o.get('sameKept')}、未被標 manual={not o.get('sameFlag')}、adoptedManual={o.get('sameAdopted')}")
@@ -802,8 +847,84 @@ print(json.dumps({
            f"e01s01 (id,no,beatIds,role)={s01_txt}")
 
 
+# ── T12：磁碟沒有 derived 的乾淨複本 → /storyboard 的 orphanShotIds 仍正確 ──────
+def t12() -> None:
+    """P1 的機械驗收：`/storyboard` 不得只讀磁碟快照 `shot.derived`。
+
+    乾淨複本（母本本來就沒有 `derived`）打 `GET /api/projects/{slug}/storyboard`，
+    e01s01 的 `orphanShotIds` 必須是 sh25–sh28（集合相等，排序不比），其餘場次為空；
+    而且要與 `GET /api/projects/{slug}` 的 `derived.orphan` 判定一致。
+    """
+    fresh_copy()
+    disk = json.loads((WORK_PROJECTS / SLUG / "project.json").read_text(encoding="utf-8"))
+    n_derived = sum(1 for s in (disk.get("shots") or []) if isinstance(s, dict) and "derived" in s)
+    code, sb = http("GET", f"/api/projects/{SLUG}/storyboard")
+    assert code == 200, f"/storyboard 失敗 {code}: {str(sb)[:300]}"
+    got = {x.get("episodeSceneId"): list(x.get("orphanShotIds") or []) for x in sb["scenes"]}
+    want_e1 = {"sh25", "sh26", "sh27", "sh28"}
+    hits = {k: set(v) for k, v in got.items()}
+    others_empty = all(not ids for k, ids in hits.items() if k != "e01s01")
+    e1_ok = hits.get("e01s01") == want_e1
+    # 與整份專案的判定一致
+    code2, pj = http("GET", f"/api/projects/{SLUG}")
+    assert code2 == 200, f"GET 專案失敗 {code2}"
+    from_proj: dict[str, set] = {}
+    for sh in pj["project"]["shots"]:
+        if (sh.get("derived") or {}).get("orphan"):
+            from_proj.setdefault(sh.get("episodeSceneId"), set()).add(sh.get("id"))
+    same = all({k: v for k, v in from_proj.items()}.get(k, set()) == hits.get(k, set())
+               for k in set(from_proj) | set(hits))
+    ok = n_derived == 0 and e1_ok and others_empty and same
+    record("T12 乾淨複本（無 derived）的 /storyboard orphanShotIds == sh25–sh28 且與 GET 專案一致", ok,
+           f"磁碟帶 derived 的鏡 {n_derived} 支（應 0）；e01s01={sorted(hits.get('e01s01') or [])}"
+           f"（應 {sorted(want_e1)}）；其他場次皆空={others_empty}；與 GET /api/projects 判定一致={same}；"
+           f"全部場次={ {k: sorted(v) for k, v in hits.items()} }")
+
+
+# ── T13：按「模板編譯」後手寫旗標消失、再存檔不翻回 manual（P3）────────────
+def t13() -> None:
+    """P3：`POST /shots/{id}/compile-prompt` 成功寫回後，`promptEnManual`／`promptAdoptedManual`
+    都要消失（使用者選擇了編譯稿），`derived.promptSource == "compiled"`，且之後再存檔一次
+    不得被翻回 manual（＝欄位不再出現、source 仍是 compiled、字仍是編譯稿）。
+    """
+    fresh_copy()
+    from app import storage  # 需要「裸存檔」驗 P3 的存檔端行為（不經 PUT 瘦身副本）
+    sid = "sh10"      # 母本非空、無旗標、≠compiled → 存檔後會被採認為手寫稿（有 adopted/手寫旗標）
+    storage.save_project(SLUG, storage.load_project(SLUG))   # 先存一次：讓 sh10 被採認成手寫稿
+    pre = next(x for x in storage.load_project(SLUG)["shots"] if x["id"] == sid)
+    pre_manual = pre.get("promptEnManual") is True
+    pre_adopted = pre.get("promptAdoptedManual") is True
+    code, r0 = http("POST", f"/api/projects/{SLUG}/shots/{sid}/compile-prompt")
+    assert code == 200, f"compile-prompt 失敗 {code}: {str(r0)[:300]}"
+    cleared_flag = r0.get("promptManualCleared") is True
+    src0 = r0.get("promptSource")
+    compiled_len = len(r0.get("promptEn") or "")
+    states = []
+    for i in (1, 2):
+        q = json.loads((WORK_PROJECTS / SLUG / "project.json").read_text(encoding="utf-8"))
+        sh = next(x for x in q["shots"] if x["id"] == sid)
+        states.append({"i": i,
+                       "manual": sh.get("promptEnManual") is True,
+                       "adoptedFlag": sh.get("promptAdoptedManual") is True,
+                       "source": (sh.get("derived") or {}).get("promptSource"),
+                       "chars": len(sh.get("promptEn") or ""),
+                       "adopted": (sh.get("derived") or {}).get("adoptedManual") is True})
+        if i == 1:   # 再存一次檔：不得被 refresh_derived 翻回 manual
+            p = storage.load_project(SLUG)
+            storage.save_project(SLUG, p)
+    ok = (pre_manual and pre_adopted and cleared_flag and src0 == "compiled"
+          and all(not s["manual"] and not s["adoptedFlag"] and s["source"] == "compiled"
+                  and s["chars"] == compiled_len and not s["adopted"] for s in states))
+    record("T13 模板編譯後手寫旗標消失、promptSource=compiled、再存檔不翻回 manual", ok,
+           f"{sid} 編譯前 promptEnManual={pre_manual}／promptAdoptedManual={pre_adopted}；"
+           f"promptManualCleared={cleared_flag}、回應 promptSource={src0}、編譯稿 {compiled_len} 字；"
+           + "；".join(f"存檔第{s['i']}次 promptEnManual={s['manual']}、promptAdoptedManual={s['adoptedFlag']}、"
+                      f"source={s['source']}、{s['chars']} 字、derived.adoptedManual={s['adopted']}"
+                      for s in states))
+
+
 # ── main ──────────────────────────────────────────────────────────
-ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11"]
+ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12", "T13"]
 
 
 def main() -> int:
