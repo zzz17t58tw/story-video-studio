@@ -25,9 +25,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import h3compose, storage, storygen
+
+if TYPE_CHECKING:  # 只給型別標註用（runtime 由 h3compose／h3gen 互相延遲匯入）
+    from . import h3gen
 
 FPS_DEFAULT = 24
 FRAME_MIN, FRAME_MAX = 124, 362
@@ -649,6 +652,167 @@ def build_project_storyboard(project: dict, scene_ids: list[str] | None = None,
     new_shots = [s for s in shots if _s(s.get("derivedFrom")) == "storyboard" and s.get("updatedAt") == ts]
     return {"created": len(new_shots), "replaced": n_replaced, "kept": n_kept,
             "shots": new_shots, "warnings": warnings, "skippedScenes": skipped_scenes}
+
+
+def backfill_shots(project: dict, scene_ids: list[str] | None = None) -> dict:
+    """M16a：只為「沒有任何鏡頭引用」的 beat 補新鏡（D4 的處方；docs/shots-live-linkage.md §3）。
+
+    為什麼不是整場重建：重建會換掉使用者調過的非手動鏡（鏡位、長度、promptEn 全歸零），而且
+    既有鏡頭的 beatIds 會重排——使用者只想要「漏掉的那句」有鏡頭，不想整個場次被重做。
+
+    做法：對每個場次，找出沒被任何鏡頭引用（beatIds ∪ dialogBeatIds）的 beat，用
+    build_scene_shots() 的同一套分組規則只為這些 beat 產生新鏡（derivedFrom="storyboard"、
+    fillReason="backfill"），插在「第一個 beat 在劇本裡的位置」對應的位置。
+
+    - **只增不刪**、不改既有鏡頭的 beatIds（既有鏡頭的 role 也不動）。
+    - 新鏡只用於填洞：場次已有鏡頭時不給 establish（否則 V5「establish 只能是場次第一鏡」
+      會炸），也不給 closing（收尾屬於既有最後一鏡）。
+    - 回 {created: [shotId...], skipped: [beatId...], warnings: [...], scenes: {...}}
+
+    純就地修改傳入的 project；寫檔由呼叫端走 storage.save_project。
+    """
+    episodes = ((project.get("script") or {}).get("episodes") or [])
+    all_es_ids = [es.get("id") for ep in episodes for es in (ep.get("scenes") or []) if es.get("id")]
+    all_es_order = {eid: i for i, eid in enumerate(all_es_ids)}
+    want = [s for s in (scene_ids or all_es_ids) if s in all_es_ids]
+    out: dict = {"created": [], "skipped": [], "warnings": [], "scenes": {}}
+    if not want:
+        out["warnings"].append("沒有可補鏡的場次（專案沒有劇本場次）")
+        return out
+
+    shots: list[dict] = [s for s in (project.get("shots") or []) if isinstance(s, dict)]
+    ts = storage.now_iso()
+    cov = h3compose.scene_coverage(project)
+    orig_order = {id(s): i for i, s in enumerate(shots)}
+    for es_id in want:
+        es = _find_es(project, es_id) or {}
+        beats = scene_beats(es)
+        missing = list((cov.get(es_id) or {}).get("missing") or [])
+        out["scenes"][es_id] = {"missing": missing, "created": []}
+        if not beats or not missing:
+            continue
+        same = [s for s in shots if s.get("episodeSceneId") == es_id]
+        built = build_scene_shots(project, es_id)
+        new_shots: list[dict] = []
+        covered_now: set[str] = set()
+        for cand in built.get("shots") or []:
+            cand = dict(cand)
+            ids = [x for x in (cand.get("beatIds") or []) if isinstance(x, str)]
+            if not ids or any(i not in missing for i in ids):
+                continue        # 混到「已有鏡頭的 beat」→ 整組不能用（會重複引用，V1 重複）
+            if any(i in covered_now for i in ids):
+                continue        # 這幾顆洞已被前面的補洞鏡吃掉
+            covered_now |= set(ids)
+            new_shots.append(cand)
+        # 還有洞沒被任何分組吃掉（分組把它併進了已有鏡頭的那一鏡）→ 單獨成鏡補起來。
+        # 不這樣做的話，短句永遠補不上（實測 e01s03 的 b05「怎麼回事?」只有 5 字，
+        # 分組規則一定把它併進 b02 那一鏡，而那鏡已經存在）。
+        for bid in [b for b in missing if b not in covered_now]:
+            beat = next((b for b in beats if str(b.get("id")) == bid), None)
+            if beat is None:
+                continue
+            dur, pad = _fit_group([beat], int((project.get("meta") or {}).get("fps") or FPS_DEFAULT))
+            role = "dialogue" if _is_dialogue(beat) else "action"
+            chars = _group_character_ids(project, es, {"beats": [beat]}, role)
+            new_shots.append({
+                "episodeSceneId": es_id,
+                "sceneId": es.get("sceneId") or None,
+                "characterIds": chars,
+                "stageIds": [],
+                "beatIds": [bid],
+                "beatPart": None,
+                "role": role,
+                "derivedFrom": "storyboard",
+                "padSec": pad,
+                "durationSec": dur,
+                "dialogBeatIds": [bid] if _is_dialogue(beat) else [],
+                "dialogLineRefs": [],
+                "spec": _role_spec(role, bool(chars)),
+                "promptZh": _prompt_draft(project, es, {"beats": [beat]}, role, chars, dur),
+                "promptEn": "",
+                "referencePlan": {"slots": [], "weakReferences": [], "promptPlaceholders": {}},
+            })
+        if not new_shots:
+            out["skipped"] += missing
+            out["warnings"].append(f"場次 {es_id}：{len(missing)} 個 beat 沒有鏡頭，"
+                                   f"但單獨補鏡會產生不合法分組（請用 force 重建整場）")
+            continue
+        seq = _next_shot_seq(shots)
+        for cand in new_shots:
+            used = {x.get("id") for x in shots}
+            nid = f"sh{seq:02d}"
+            while nid in used:
+                seq += 1
+                nid = f"sh{seq:02d}"
+            seq += 1
+            ids = [x for x in (cand.get("beatIds") or []) if isinstance(x, str)]
+            role = _s(cand.get("role"))
+            has_dlg = any(_is_dialogue(next((b for b in beats if str(b.get("id")) == i), {}))
+                          for i in ids)
+            if same and role in ("establish", "closing"):
+                role = "dialogue" if has_dlg else "action"
+            cand.update({
+                "id": nid, "no": 0,
+                "derivedFrom": "storyboard",
+                "fillReason": "backfill",
+                "role": role,
+                "spec": cand.get("spec") if role == _s(cand.get("role")) else
+                        _role_spec(role, bool(cand.get("characterIds"))),
+                "images": {"first": "", "last": ""},
+                "video": {"path": "", "status": "none", "taskType": "r2v", "seed": 0, "note": ""},
+                "voice": {"path": "", "engine": ""},
+                "durationFrames": h3compose.frames_for(cand.get("durationSec"))["legal"],
+                "updatedAt": ts,
+            })
+            shots.append(cand)
+            out["created"].append(nid)
+            out["scenes"][es_id]["created"].append(nid)
+
+    # 全專案排序：依場次順序；場次內依「第一個 beat 在劇本的位置」，
+    # 沒有 beatIds 的（舊手動鏡／重複鏡）排在該場次最前面一組，組內維持原相對順序。
+    def _key(s: dict) -> tuple:
+        ids = [x for x in (s.get("beatIds") or []) if isinstance(x, str)]
+        es_id = _s(s.get("episodeSceneId"))
+        es_obj = _find_es(project, es_id) or {}
+        order = {str(b.get("id")): i for i, b in enumerate(scene_beats(es_obj))}
+        pos = min((order.get(x, 10 ** 6) for x in ids), default=-1)
+        return (all_es_order.get(es_id, len(all_es_order)), pos, orig_order.get(id(s), 10 ** 9),
+                0 if _s(s.get("derivedFrom")) == "manual" else 1,
+                int(s.get("no") or 0))
+
+    shots.sort(key=_key)
+    made_ids = set(out["created"])
+    # 補鏡插在場次最前面時，原本的 establish（可能是使用者微調過的鏡）就不是場次第一鏡了。
+    # 合約 V5「establish 只能用在場次第一鏡」必須成立 → 把它降級成 dialogue／action；
+    # 既有鏡頭的 beatIds、長度以外的內容一律不動，且在 warnings 講清楚。
+    for es_id in want:
+        block = [s for s in shots if _s(s.get("episodeSceneId")) == es_id]
+        es_obj = _find_es(project, es_id) or {}
+        beat_by_id = {str(b.get("id")): b for b in scene_beats(es_obj)}
+        # 「場次第一支有 beatIds 的既有規則式鏡」才是 V5 認定的第一鏡
+        # （前面沒 beatIds 的手動／重複鏡不佔位；補洞鏡自己也不算）。
+        first_rule_i = next((k for k, o in enumerate(block)
+                             if _s(o.get("beatIds") and o.get("beatIds"))
+                             and _s(o.get("id")) not in made_ids), None)
+        for i, s in enumerate(block):
+            # 補洞鏡自己也不給 establish（上面已降級）。
+            if _s(s.get("role")) != "establish" or _s(s.get("id")) in made_ids:
+                continue
+            if first_rule_i is None or i <= first_rule_i:
+                continue
+            has_dlg = any(_is_dialogue(beat_by_id.get(x, {})) for x in (s.get("beatIds") or []))
+            s["role"] = "dialogue" if has_dlg else "action"
+            s["spec"] = _role_spec(s["role"], bool(s.get("characterIds")))
+            out["warnings"].append(f"場次 {es_id}：{s.get('id')} 因補鏡而不再是場次第一鏡，"
+                                   f"role 已由 establish 改為 {s['role']}（合約 V5）")
+    for i, s in enumerate(shots, start=1):
+        s["no"] = i
+    project["shots"] = shots
+    if out["created"]:
+        out["warnings"].append(
+            f"已為 {len(out['created'])} 個沒有鏡頭的 beat 補上新鏡："
+            + "、".join(out["created"]) + "（只增不刪，既有鏡頭一字未改）")
+    return out
 
 
 # ── 舊資料遷移 ─────────────────────────────────────────────────

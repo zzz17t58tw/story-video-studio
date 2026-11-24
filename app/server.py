@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import sys
@@ -83,6 +84,30 @@ def api_list_projects():
         return _fail(400, str(e))
 
 
+def _project_with_derived(slug: str) -> dict:
+    """讀整份專案的唯一出口（M16a）：在 **deepcopy** 上重算衍生值再回，不寫檔。
+
+    為什麼：衍生值（referencePlan／promptEn／derived）只要不是「用當下真相重算」就會過期
+    ——人物頁改了外型、場景頁刪了參考圖，鏡頭頁還顯示舊快照，使用者照著按生成就會送錯字。
+    讀端一律走這裡，畫面上的字就永遠等於送件口重編譯的字。
+    """
+    src = storage.load_project(slug)
+    try:
+        data = copy.deepcopy(src)
+        h3compose.refresh_derived(data)
+        return data
+    except Exception:  # noqa: BLE001 — 衍生重算失敗時寧可回原始資料，也不要整個專案開不起來
+        return src
+
+
+@app.get("/api/projects/{slug}")
+def api_get_project(slug: str):
+    try:
+        return {"ok": True, "project": _project_with_derived(slug)}
+    except StorageError as e:
+        return _fail(404, str(e))
+
+
 class CreateProjectBody(BaseModel):
     name: str
     aspectRatio: str = "9:16"
@@ -107,7 +132,7 @@ def api_create_project(body: CreateProjectBody):
 @app.get("/api/projects/{slug}")
 def api_get_project(slug: str):
     try:
-        return {"ok": True, "project": storage.load_project(slug)}
+        return {"ok": True, "project": _project_with_derived(slug)}
     except StorageError as e:
         return _fail(404, str(e))
 
@@ -1055,7 +1080,28 @@ def api_storyboard_rows(slug: str):
     except Exception as e:  # 舊資料也不能把這支弄成 500
         log.exception("storyboard rows 失敗")
         return _fail(400, f"讀取分鏡表失敗：{type(e).__name__}: {e}")
+    # M16a：每場次「哪些 beat 沒有鏡頭」「哪些鏡頭未連動劇本」——分鏡表直接顯示，不必另算
+    covers = h3compose.scene_coverage(data)
+    for info in result.get("scenes") or []:
+        cov = covers.get(info.get("episodeSceneId")) or {}
+        info["uncoveredBeats"] = list(cov.get("missing") or [])
+    orphans: dict[str, list[str]] = {}
+    for sh in (data.get("shots") or []):
+        if isinstance(sh, dict) and (sh.get("derived") or {}).get("orphan"):
+            orphans.setdefault(str(sh.get("episodeSceneId") or ""), []).append(str(sh.get("id") or ""))
+    for info in result.get("scenes") or []:
+        info["orphanShotIds"] = orphans.get(info.get("episodeSceneId"), [])
     return {"ok": True, "slug": slug, **result}
+
+
+def _rule_key(message) -> str:
+    """把契約錯誤訊息濃縮成「哪一條規則」（去掉細節）：同鏡同規則換句話說不重複擋人。"""
+    msg = str(message or "")
+    for tag in ("合約 V1", "合約 V2", "合約 V3", "合約 V4", "合約 V5"):
+        if tag in msg:
+            head = msg.split("（合約")[0].split("：")[0][:24]
+            return f"{tag}:{head}"
+    return msg[:24]
 
 
 @app.post("/api/projects/{slug}/storyboard/build")
@@ -1078,6 +1124,57 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
     notes = storyboard.migrate_shot_fields(data)
     es_all = [es.get("id") for ep in ((data.get("script") or {}).get("episodes") or [])
               for es in (ep.get("scenes") or []) if es.get("id")]
+    # M16a（docs/shots-live-linkage.md §3）：預設只「補洞」——為沒有任何鏡頭引用的 beat 補新鏡，
+    # 既有鏡頭（含使用者調過的）完全不動。force=true 才走舊的全重建。
+    backfill: dict = {"created": [], "skipped": [], "warnings": [], "scenes": {}}
+    if not body.force:
+        # 補鏡前先記下「原本就有的契約錯誤」：補鏡只增不刪，只有新增的 error 才擋寫檔
+        _v_before = h3compose.validate_project(data)
+        before_err = {(i.get("scope"), i.get("targetId"), i.get("message"))
+                      for i in _v_before["issues"] if i["level"] == "error"}
+        before_rule = {(i.get("scope"), i.get("targetId"), _rule_key(i.get("message")))
+                       for i in _v_before["issues"] if i["level"] == "error"}
+        try:
+            backfill = storyboard.backfill_shots(data, scene_ids=scene_ids)
+            notes.extend(backfill["warnings"])
+        except Exception as e:  # noqa: BLE001 — 補鏡失敗就當沒有洞，不擋這一支
+            log.exception("backfill_shots 失敗")
+            notes.append(f"補鏡失敗（{type(e).__name__}: {e}）；本次未新增鏡頭")
+            backfill = {"created": [], "skipped": [], "warnings": [], "scenes": {}}
+        check = h3compose.validate_project(data)
+        if backfill["created"]:
+            # 契約 §5：驗不過就不落檔（不寫半套資料）。只比「新增的 error」——補鏡只增不刪，
+            # 舊專案本來就有的契約錯誤（漏句、V4 唸不完…）不該讓補鏡整個失敗。
+            new_bad = [i for i in check["issues"] if i["level"] == "error"
+                       and (i.get("scope"), i.get("targetId"), i.get("message")) not in before_err]
+            # 同一條規則改了錯誤訊息時（例如 V5 的 establish 規則改成先看「有 beatIds 的鏡」），
+            # 「同一鏡、同一條規則」不算新增錯誤——否則同一顆既有問題會換一句話再擋一次。
+            new_bad = [i for i in new_bad
+                       if (i.get("scope"), i.get("targetId"), _rule_key(i.get("message")))
+                       not in before_rule]
+            if new_bad:
+                return _fail(400, "補鏡結果新增了契約錯誤，未寫檔：" + "；".join(
+                    f"{i.get('name') or i.get('targetId')}：{i.get('message')}" for i in new_bad[:5]))
+            try:
+                storage.save_project(slug, data)
+            except StorageError as e:
+                return _fail(400, f"補鏡結果沒有落檔（資料不合法）：{e}")
+            check = h3compose.validate_project(data)
+        created_ids = set(backfill["created"])
+        return {
+            "ok": True, "slug": slug, "mode": "backfill",
+            "created": len(backfill["created"]), "createdIds": backfill["created"],
+            "kept": len([s for s in (data.get("shots") or []) if isinstance(s, dict)]),
+            "replaced": 0, "skippedBeats": backfill["skipped"],
+            "scenes": backfill["scenes"],
+            "shots": [{k: s.get(k) for k in ("id", "no", "episodeSceneId", "role", "beatIds", "padSec",
+                                             "durationSec", "dialogBeatIds", "characterIds", "fillReason")}
+                      for s in (data.get("shots") or [])
+                      if isinstance(s, dict) and s.get("id") in created_ids],
+            "warnings": notes,
+            "skippedScenes": [],
+            "issues": check["issues"], "counts": check["counts"],
+        }
     # 台詞長到一鏡唸不完（>15.08 秒）時，光靠分鏡層無解（V4 會一直是 error）→
     # 先依標點把那種 beat 拆開（一字不改），拆完再重建分鏡。
     # 兩段式：① 先拆「沒被任何鏡頭引用」的（安全）；② 重建分鏡（重建會換掉舊鏡頭，
@@ -1122,7 +1219,7 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
         storage.save_project(slug, data)
     except StorageError as e:
         return _fail(400, f"分鏡結果沒有落檔（資料不合法）：{e}")
-    rows = storyboard.storyboard_rows(data)
+    # M16a：分鏡表只做唯讀統計（不回寫 derived），算不出來也不擋重建
     return {
         "ok": True, "slug": slug,
         "created": res["created"], "replaced": res["replaced"], "kept": res["kept"],
@@ -1131,7 +1228,6 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
                   for s in res["shots"]],
         "warnings": notes + res["warnings"],
         "skippedScenes": res["skippedScenes"],
-        "totalSeconds": rows["totalSeconds"],
         "issues": check["issues"], "counts": check["counts"],
     }
 

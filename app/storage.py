@@ -682,6 +682,14 @@ def save_project(slug: str, data: dict) -> dict:
     # M12a：先把台詞引用正規化（換算／同步 dialogLineRefs），再驗證——
     # 否則只帶舊欄位或只帶新欄位的前端版本會撞到不一致的引用而 400。
     migrate_dialog_linkage(data)
+    # M16a：填完預設值後、驗證前，把衍生值（referencePlan／dialogLineRefs／promptEn／derived）
+    # 用「當下真相」重算一次——存檔當下就把過期快照修掉，之後讀與送件看到的都是同一份字。
+    # （refresh_derived 自己永不 raise；這裡再包一層以防匯入期問題拖垮存檔。）
+    try:
+        from . import h3compose as _h3c
+        _h3c.refresh_derived(data)
+    except Exception:  # noqa: BLE001 — 衍生重算是加值步驟，不能讓寫檔失敗
+        pass
     errors = validate_project(data)
     if errors:
         raise StorageError("；".join(errors))
