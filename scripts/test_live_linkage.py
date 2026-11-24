@@ -169,6 +169,17 @@ def t1() -> None:
     # 改「會進編譯稿」的欄位：compile_prompt 的主體定義讀 identityAnchors.hairStyle／
     # appearance.promptEn（外型中文欄位 face 目前只影響人物頁顯示，不進 prompt）。
     new_hair = "MARKS-T1 shoulder-length crimson hair with a single braid"
+    # 母本 c01 的規則式鏡頭存著舊版手改稿（無旗標）→ refresh_derived 會把它們採認為手寫稿
+    # （F1 手改稿保護），於是「非手動鏡」會歸零、T1 失去比較對象。這裡把 c01 的規則式鏡頭
+    # 明確設定回「非手動稿」（清旗標＋清空 promptEn，讓它們走正常編譯路徑）——只調
+    # 「怎麼造出測試對象」，斷言一條不放寬。
+    cands = [s for s in (p.get("shots") or [])
+             if "c01" in (s.get("characterIds") or [])
+             and str(s.get("derivedFrom")) in ("storyboard", "deploy")]
+    assert cands, "母本沒有引用 c01 的規則式鏡頭，T1 無法成立"
+    for seed in cands:
+        seed.pop("promptEnManual", None)
+        seed["promptEn"] = ""
     before = {sid: (s.get("promptEn") or "") for sid, s in shots_by_id(p).items()}
     c01 = next(c for c in p["characters"] if c["id"] == "c01")
     c01.setdefault("identityAnchors", {})["hairStyle"] = new_hair

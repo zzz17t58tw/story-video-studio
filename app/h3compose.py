@@ -935,11 +935,16 @@ def refresh_derived(project: dict) -> dict:
     - D1 referencePlan：沿用 build_reference_plan（不重寫邏輯）。
     - D3 dialogLineRefs：以 dialogBeatIds 對照該場次台詞順序重算（無 dialogBeatIds 的舊資料
       保留原值，不然會把使用者填的舊編號清成空）。
-    - D2 promptEn：僅在「未標 promptEnManual 且 derivedFrom ∈ {storyboard, deploy}」或
-      「promptEn 為空」時覆蓋。使用者自己打的字（derivedFrom=manual，或手動稿）不覆蓋，
-      但會比對「現算」與「存檔值」寫 derived.promptEnStale。
-    - derived：{at, promptChars, promptSource(compiled|manual|empty), promptEnStale, slots,
-      pictures, orphan, uncoveredBeats}；單鏡失敗記在該鏡 derived.error，其他鏡照算。
+    - D2 promptEn：三段判定（保護使用者手工成果，見 docs/shots-live-linkage.md §1）
+        1. promptEnManual=true → 保留（永不自動覆蓋）。
+        2. promptEn 非空、與這次算出的 compiled 不同、且沒有旗標 → **採認為手寫稿**：
+           設 promptEnManual=true、保留原值、promptSource=manual、promptEnStale=true、adoptedManual=true。
+           （舊版前端改字不打旗標，第一次存檔就會被覆蓋——這條是補那個破口。）
+        3. promptEn 為空 或 與 compiled 相同 → 寫入 compiled（一般重算）。
+      唯一例外：derivedFrom=deploy 且存檔值是部署短草稿（<800 字且不含 <Picture）→ 照舊覆蓋
+      （那是必須被編譯的草稿，凍結它等於讓使用者永遠拿到廢稿）。
+    - derived：{at, promptChars, promptSource(compiled|manual|empty), promptEnStale, adoptedManual,
+      slots, pictures, orphan, uncoveredBeats}；單鏡失敗記在該鏡 derived.error，其他鏡照算。
 
     只在記憶體上改，寫檔由呼叫端決定（storage.save_project 會存；讀端在 deepcopy 上算）。
     回 {shots: 鏡數, errors: {shotId: 訊息}}。
@@ -976,34 +981,46 @@ def refresh_derived(project: dict) -> dict:
                 sh["dialogLineRefs"] = storage.dialog_beat_index(dialog_ids, dlg)
             elif not isinstance(sh.get("dialogLineRefs"), list):
                 sh["dialogLineRefs"] = []
-            # D2 promptEn
+            # D2 promptEn（三段判定：手改稿保護）
             stored = _s(sh.get("promptEn"))
             manual = sh.get("promptEnManual") is True
-            source_of_shot = _prompt_source_of(sh)
             auto = (not manual) and (
                 _s(sh.get("derivedFrom")) in PROMPT_AUTO_SOURCES or not stored)
-            fresh = compiled = ""
-            if auto or (source_of_shot == "manual" and not stored):
+            # 判定要「跟這次算出的 compiled 比」，所以規則式鏡一律現算一份（編譯是確定性的）
+            compiled = ""
+            if auto or not manual or stored:
                 compiled, _cw, _meta = compile_prompt(project, sh)
                 compiled = _s(compiled)
-            if auto:
-                fresh = compiled
+            deploy_draft = (_s(sh.get("derivedFrom")) == "deploy" and len(stored) < 800
+                            and "<Picture" not in stored)
+            adopted = False
+            if manual:
+                fresh = stored                                  # ① 手寫稿（有旗標）
+            elif not stored or stored == compiled or deploy_draft:
+                fresh = compiled                                # ③ 空／同值／部署短草稿 → 重算
                 sh["promptEn"] = compiled
             else:
+                # ② 非空、與編譯稿不同、且沒有旗標 → 舊版前端改的字：採認為手寫稿並保全
+                sh["promptEnManual"] = True
                 fresh = stored
+                adopted = True
             new_source = _prompt_source_of(sh)
             d.update({
                 "promptChars": len(fresh),
                 "promptSource": new_source,
-                # 手寫稿／使用者自打的字才算「落後」：衍生流程自己算的那份一定是即時的
-                "promptEnStale": bool(new_source == "manual" and auto is False
-                                      and stored != _s(compiled)),
+                # 手寫稿才算「落後」：衍生流程自己算的那份一定是即時的
+                "promptEnStale": bool(new_source == "manual" and stored != compiled),
+                "adoptedManual": adopted,
                 "slots": len(plan.get("slots") or []),
                 "pictures": [int(s["ordinal"]) for s in (plan.get("slots") or [])
                              if isinstance(s, dict) and isinstance(s.get("ordinal"), int)],
             })
             if new_source != "manual":
                 d["promptEnStale"] = False
+            if not adopted:
+                d.pop("adoptedManual", None)
+            else:
+                d["promptEnStale"] = True
             # D5 孤兒：beatIds 空或全部指向不存在的 beat，且同場次有規則式鏡頭
             es_id = _s(sh.get("episodeSceneId"))
             scene_cov = cov.get(es_id) or {}

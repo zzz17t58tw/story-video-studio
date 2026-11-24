@@ -3227,6 +3227,15 @@ function m3dShotTools(sh) {
         pre, showWarnings(res.warnings));
       status.className = "hint ok-text";
       status.textContent = "已寫回 promptEn。";
+      // 編譯是使用者主動要求「用模板覆蓋」：手寫稿旗標要一起收掉，否則存檔端會把手寫稿
+      // 判成「落後」並在卡片上一直掛警語（編譯結果＝現算值，本來就不是手改稿）。
+      sh.promptEnManual = false;
+      if (sh.derived && typeof sh.derived === "object") {
+        sh.derived.promptSource = "compiled";
+        sh.derived.promptEnStale = false;
+        sh.derived.adoptedManual = false;
+      }
+      markDirty();
       const ta = document.querySelector(`textarea[data-prompt-for="${sh.id}"]`);
       if (ta) ta.value = res.promptEn;
       setSaveStatus("saved", `已編譯 ${sh.id} 的 promptEn`);
@@ -3977,12 +3986,17 @@ function sbDerivedLine(sh) {
   const pics = Array.isArray(d.pictures) ? d.pictures.length : Number(d.slots || 0);
   const stale = d.promptEnStale === true;
   const isManual = d.promptSource === "manual";
+  const adopted = d.adoptedManual === true;
   const cls = stale ? "hint warn-text" : "hint ok-text";
-  const text = stale ? `⚠ 手動稿已落後（現算 ${d.promptChars ?? n} 字／${pics} 張圖）`
+  // adoptedManual：這份是「舊版前端改的字、存檔時才被採認為手寫稿」——保留它，但講清楚出處與更新方法
+  const text = adopted
+    ? `⚠ 舊版手改稿已保留（${n} 字／${pics} 張圖；按「模板編譯」可更新）`
+    : stale ? `⚠ 手動稿已落後（現算 ${d.promptChars ?? n} 字／${pics} 張圖）`
     : `已同步（${n} 字／${pics} 張圖）${isManual ? " · 手動稿" : ""}`;
   return el("span", {
     class: "sb-derived " + cls, "data-prompt-chars": String(n),
     "data-prompt-source": String(d.promptSource || ""),
+    "data-adopted-manual": adopted ? "1" : "0",
     title: `衍生值重算於 ${d.at || "—"}${d.error ? `；此鏡重算失敗：${d.error}` : ""}`,
   }, el("span", { text: text }), d.error ? el("span", { class: "hint err-text", text: ` · ${d.error}` }) : null);
 }
