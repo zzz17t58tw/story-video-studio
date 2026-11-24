@@ -69,6 +69,11 @@
 - M13 模型對話回填升級（2026-11-21，使用者：「回填應該要有相對應的格子」）
   - M13a 多欄套用＋結構化回填：`POST /chat/apply-batch`（一次多欄、單次驗證、原子寫檔）、章回／場次 beats／鏡頭 dialogue／服裝整份可寫並驗元素形狀、前端「解析成多欄」把一段回覆自動分到多個欄位
   - M13b 任務↔回填目標宣告：`CHAT_TASKS[*].applyHint`（任務 chip 標「→ 回填：…」）、氣泡「⇣ 回填到 目標」只展開該任務的格子、外型解析 `parseAppearance`、三版台詞／音色「用第 N 版」一鍵寫入、檢查矛盾標「僅建議，不回填」
+- M14 分鏡層（2026-11-21，權威規格 `docs/storyboard-contract.md`）：beats 為真相、`beatIds` 為主鍵、V1–V5 硬驗
+- M15 Agent 對接層（2026-11-21）：`app/agentdoc.py` 單一真相＋`/api/agent/{manifest,guide,coverage}`
+- M16 鏡頭頁即時連動（2026-11-24，權威規格 `docs/shots-live-linkage.md` v1.1，分支 `feat/m16-live-link`）：
+  衍生值（referencePlan／promptEn／dialogLineRefs／覆蓋狀態／孤兒）一律用當下真相重算（存檔前＋讀端 deepcopy）；
+  手改稿保全（`promptEnManual`／`promptAdoptedManual`）；`storyboard.backfill_shots()` 增量補洞；孤兒鏡頭人手確認移除
 
 ## 技術選型（固定，子代理不得自行更換）
 
@@ -169,3 +174,4 @@
 | 2026-11-24 16:40 | 傻瓜介面預設＋進階模式開關（v0.9.19） | ✅ 已完成 | 右上角「⚙ 進階模式」開關（localStorage 記憶）；body.adv-on 控制 .adv-only 顯示、.adv-hint 反之。人物頁傻瓜只留 姓名/定位/年齡/性別/髮型（英文 5 欄）＋頭像＋對話，其餘 24 欄（別名/膚色/臉型/體型/特徵/promptEn/服裝/錨點/stages/聲音/參考圖/多角度表）收進階；場景頁 3 欄 + 參考圖、光線/氛圍/promptEn/環境音收進階；鏡頭頁主鈕只留免費「🎬 由劇本自動分鏡」，一鍵佈署分鏡/拆草稿/新增鏡頭收進階並加說明；設定頁 project.json 改 foldBox 折疊＋整卡進階（72,037→2,094 字元）；故事頁風格/章回進階；劇本頁新增集/場次進階。實測 8796＋複本：人物卡可見欄位 5→29、場景卡 3→8、鏡頭頁少 3 顆花錢鈕、console 0 error、node 語法 OK。 |
 | 2026-11-24 17:25 | 部署分鏡補齊動作 beat（v0.9.20） | ✅ 已完成 | 新增 `deploy._align_beats_with_storyboard()`：落地前用 `storyboard.build_scene_shots()` 規則骨架決定每鏡 beatIds/長度/職責，模型只給文字；掛在 `_land_shots()`（兩條部署路徑共用），例外退回舊行為。實測喪屍爆發：V1 error 2→0、validate error 2→0、e01s01 3→7 鏡、e01s02 3→9 鏡，長度全在 124–362 幀。副作用已寫入 CHANGELOG：部署參數的「總鏡數」變成參考值，實際由 beat 數決定。 |
 | 2026-11-24 18:40 | 三引擎送出口機械轉化（v0.9.21） | ✅ 已完成 | `app/promptrules.py` 新增 `sanitize_moss()`（去編號分段／quality tag／`<Picture>`／尺寸）、`sanitize_qwen()`（`<Picture N>`→`<imageK>`、超範圍移除）、`finalize()`（原稿合規→original；可機械修正→sanitized；修不動→改用官方組稿 built；仍不乾淨則照送並標明）。接線：`imagegen.build_prompt`（Qwen）、`generate_moss_image`、`generate_character_sheet`（立繪）、`server` 的 MOSS 預覽；回應新增 `promptRule`／`promptSource`。把原本「不合規就 raise 擋下」改成「自動轉化後照送」（使用者定調：不合規一樣能生，只是品質差）。實測：爛 caption 4 項違規→清洗後 check True；Qwen `<Picture 9>`→自動移除並轉 `<image1>`；H3 草稿缺四段→改用編譯稿 3196 字；合規稿 source=original；空字串退回組稿不爆。 |
+| 2026-11-24 20:05 | M16 鏡頭頁即時連動（v0.9.22） | ✅ 已實作，待合併 | 契約 `docs/shots-live-linkage.md` v1.1（真相 A 類／衍生 B 類分界、T1–T13）。新增 `h3compose.refresh_derived()`（逐鏡重算 referencePlan／dialogLineRefs／promptEn＋`derived` 摘要，永不 raise）與 `scene_coverage()`；`storage.save_project()` 寫檔前重算、`GET /api/projects/{slug}` 與 `_load_for_m3d()` 在記憶體上重算（讀端不寫檔）。**手改稿保全**：非空且 ≠ 編譯稿且無旗標 → 採認為手寫稿（`promptEnManual`／`promptAdoptedManual`，`derived.adoptedManual` 持久化）；「模板編譯」清除手寫旗標（`promptManualCleared`）。新增 `storyboard.backfill_shots()` 增量補洞（只增不刪、無 beatIds 的既有鏡一律排場次最後、既有鏡頭順序不變），接進 `/storyboard/build`；孤兒鏡頭 `derived.orphan`＋`/storyboard` 的 `orphanShotIds`＋場次標題「移除本場未連動的鏡頭（N）」人手確認刪除。前端進鏡頭／生成頁先存再整份重抓、job 完成整份重抓。實測：T1–T13 連跑三次全綠；`project-20261122-121207` 複本存檔三次 sh10 手改稿 1881 字不動、孤兒 sh25–sh28、補洞補上 b05（sh29）、既有 28 鏡順序與 beatIds 一字不動、validate error 5→5（母本既有。補洞後 3）。 |

@@ -459,7 +459,7 @@ def _nonspace_len(text: Any) -> int:
 def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
     """契約 §4 的 V1／V4／V5（V2 在①、V3 在③）。純邏輯，不動資料。
 
-    V1 順序覆蓋：場次內 shots（依 no）的 beatIds 串接＝該場次 beats（排除 _skipped）。
+    V1 順序覆蓋：場次內 shots（依 no）的 beatIds 串接＝該場次 beats（排除 _skipped），不符一律 error。
       舊專案（沒有 beatIds 也沒有 dialogBeatIds）不報 error，只給 warn「此場次尚未分鏡」。
     V4 台詞唸得完：durationSec - padSec ≥ 台詞字數 / 4.5。
     V5 職責一致：dialogue 必含 ≥1 dialogue beat；establish 只能場次第一鏡且不含台詞；
@@ -504,9 +504,10 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
             if unshot_lines and not unshot and _covered_has_line:
                 # 整場的 beat 都被演到，但台詞一句都沒引用 → 分鏡只演了畫面（V2 的主體會接手報）
                 active_lines = [b for b in beats if _s(b.get("type") or "dialogue") != "action"]
-                issues.append(_issue("error", "episodeScene", es_id,
-                                     f"這一場有 {len(active_lines)} 句台詞沒有任何鏡頭引用"
-                                     f"（{'、'.join(str(b.get('id')) for b in active_lines)}）", label))
+                issues.append(_issue(
+                    "error", "episodeScene", es_id,
+                    f"這一場有 {len(active_lines)} 句台詞沒有任何鏡頭引用"
+                    f"（{'、'.join(str(b.get('id')) for b in active_lines)}）", label))
             elif unshot:
                 # 有動作／台詞 beat 沒有鏡頭 → 品質提醒（不擋生成），要講清楚是哪幾個
                 issues.append(_issue("warn", "episodeScene", es_id,
@@ -523,6 +524,10 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 continue
 
             # ── V1 順序覆蓋 ──
+            # chain（場次內依鏡號串接的 beatIds）必須完全等於劇本 beats 的順序，不符一律 error。
+            # 這條不放寬：成品播放順序就靠鏡號，順序排錯卻是黃字等於讓使用者帶著錯片出貨。
+            # （storyboard.backfill_shots 會把補洞鏡插在「第一個 beat 在劇本裡的位置」，
+            #  補完後 chain 自然回到劇本順序——實測 e01s03 → b01/b02/b05/b03/b04，與 want 相同。）
             chain: list[str] = []
             other_scene_beats: set[str] = set()
             for s in shots:
@@ -551,7 +556,8 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 else:
                     extra = [b for b in chain if b not in want]
                     dup = sorted({b for b in chain if chain.count(b) > 1})
-                    detail = ("重複引用：" + "、".join(dup)) if dup else ("多出不在劇本的 beat：" + "、".join(extra))
+                    detail = (("重複引用：" + "、".join(dup)) if dup
+                              else ("多出不在劇本的 beat：" + "、".join(extra)))
                 issues.append(_issue(
                     "error", "episodeScene", es_id,
                     f"鏡頭的 beatIds 串接（依鏡號）與劇本 beats 不一致（合約 V1）：{detail}",
@@ -572,13 +578,14 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 if role == "dialogue" and not dlg_refs:
                     issues.append(_issue("error", "shot", s.get("id"),
                                          "role=dialogue 但這一鏡沒有引用任何 dialogue beat（合約 V5）", nm))
-                if role == "establish":
-                    if s.get("id") != first_shot_id:
-                        issues.append(_issue("error", "shot", s.get("id"),
-                                             "role=establish 只能用在場次第一鏡（合約 V5）", nm))
-                    if dlg_refs:
-                        issues.append(_issue("error", "shot", s.get("id"),
-                                             f"role=establish 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）", nm))
+                if role == "establish" and s.get("id") != first_shot_id:
+                    # 不放寬：establish 只能場次第一鏡。補洞時 backfill_shots 自己會把補洞鏡的
+                    # establish 降級成 dialogue/action，校驗端不需要為補洞開後門。
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         "role=establish 只能用在場次第一鏡（合約 V5）", nm))
+                if role == "establish" and dlg_refs:
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         f"role=establish 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）", nm))
                 if role == "reaction" and dlg_refs:
                     issues.append(_issue("error", "shot", s.get("id"),
                                          f"role=reaction 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）；"
@@ -840,3 +847,178 @@ def _now() -> str:
     from datetime import datetime
     from zoneinfo import ZoneInfo
     return datetime.now(ZoneInfo("Asia/Taipei")).isoformat(timespec="seconds")
+
+
+# ── 4. M16a：衍生值重算（docs/shots-live-linkage.md §1–§2）──────────
+# 真相（A 類）＝劇本 beats／人物／場景／分鏡決策；衍生（B 類）＝referencePlan／promptEn／
+# dialogLineRefs／覆蓋狀態／孤兒判定。核心規則：畫面上的字＝API 回的字＝實際送出的字。
+# 所以「讀」與「寫」兩端都要呼叫 refresh_derived（讀端在 deepcopy 上算、不寫檔）。
+PROMPT_AUTO_SOURCES = ("storyboard", "deploy")   # 這些來源的 promptEn 可以被自動覆蓋
+DERIVED_FIELDS = ("referencePlan", "dialogLineRefs", "derived")
+
+
+def scene_coverage(data: dict) -> dict[str, dict]:
+    """每場次：{covered: set(beatId), missing: [beatId 依劇本順序], uncoveredDialog: [beatId]}。
+
+    D4：掃 shots[].beatIds ∪ dialogBeatIds（沒有 beatIds 的舊資料才退回 dialogBeatIds）。
+    純讀，不改資料；refresh_derived 算 uncoveredBeats 與 storyboard.backfill_shots 共用這支。
+    """
+    shots = [s for s in (data.get("shots") or []) if isinstance(s, dict)]
+    out: dict[str, dict] = {}
+    for ep in ((data.get("script") or {}).get("episodes") or []):
+        if not isinstance(ep, dict):
+            continue
+        for es in (ep.get("scenes") or []):
+            if not isinstance(es, dict) or not _s(es.get("id")):
+                continue
+            es_id = _s(es.get("id"))
+            beats = [b for b in (es.get("beats") or [])
+                     if isinstance(b, dict) and _s(b.get("id")) and not b.get("_skipped")]
+            covered: set[str] = set()
+            for sh in shots:
+                if _s(sh.get("episodeSceneId")) != es_id:
+                    continue
+                ids = [x for x in (sh.get("beatIds") or []) if isinstance(x, str)]
+                if not ids:
+                    ids = [x for x in (sh.get("dialogBeatIds") or []) if isinstance(x, str)]
+                covered |= set(ids)
+            missing = [str(b.get("id")) for b in beats if str(b.get("id")) not in covered]
+            out[es_id] = {
+                "covered": covered,
+                "missing": missing,
+                "uncoveredDialog": [str(b.get("id")) for b in beats
+                                    if str(b.get("id")) in missing and b.get("type") != "action"],
+                "beatIds": [str(b.get("id")) for b in beats],
+            }
+    return out
+
+
+def _prompt_source_of(shot: dict) -> str:
+    """manual＝人寫的稿（不得自動覆蓋）／compiled＝衍生流程算的／empty＝空的。"""
+    if not _s(shot.get("promptEn")):
+        return "empty"
+    return "manual" if shot.get("promptEnManual") is True else "compiled"
+
+
+def refresh_derived(project: dict) -> dict:
+    """就地重算每鏡的衍生值（D1／D2／D3）＋衍生摘要 `shot.derived`；永不 raise。
+
+    - D1 referencePlan：沿用 build_reference_plan（不重寫邏輯）。
+    - D3 dialogLineRefs：以 dialogBeatIds 對照該場次台詞順序重算（無 dialogBeatIds 的舊資料
+      保留原值，不然會把使用者填的舊編號清成空）。
+    - D2 promptEn：三段判定（保護使用者手工成果，見 docs/shots-live-linkage.md §1）
+        1. promptEnManual=true → 保留（永不自動覆蓋）。
+        2. promptEn 非空、與這次算出的 compiled 不同、且沒有旗標 → **採認為手寫稿**：
+           設 promptEnManual=true、保留原值、promptSource=manual、promptEnStale=true、adoptedManual=true。
+           （舊版前端改字不打旗標，第一次存檔就會被覆蓋——這條是補那個破口。）
+        3. promptEn 為空 或 與 compiled 相同 → 寫入 compiled（一般重算）。
+      唯一例外：derivedFrom=deploy 且存檔值是部署短草稿（<800 字且不含 <Picture）→ 照舊覆蓋
+      （那是必須被編譯的草稿，凍結它等於讓使用者永遠拿到廢稿）。
+    - derived：{at, promptChars, promptSource(compiled|manual|empty), promptEnStale, adoptedManual,
+      slots, pictures, orphan, uncoveredBeats}；單鏡失敗記在該鏡 derived.error，其他鏡照算。
+
+    只在記憶體上改，寫檔由呼叫端決定（storage.save_project 會存；讀端在 deepcopy 上算）。
+    回 {shots: 鏡數, errors: {shotId: 訊息}}。
+    """
+    from . import storage  # 延遲匯入：storage 會反過來呼叫本函式（避免循環匯入）
+
+    stats: dict = {"shots": 0, "errors": {}}
+    if not isinstance(project, dict):
+        return stats
+    shots = [s for s in (project.get("shots") or []) if isinstance(s, dict)]
+    cov = scene_coverage(project)
+    at = _now()
+    scene_shots: dict[str, list[dict]] = {}
+    for sh in shots:
+        scene_shots.setdefault(_s(sh.get("episodeSceneId")), []).append(sh)
+    es_lookup: dict[str, dict] = {}
+    for ep in ((project.get("script") or {}).get("episodes") or []):
+        for es in ((ep or {}).get("scenes") or []):
+            if isinstance(es, dict) and _s(es.get("id")):
+                es_lookup[_s(es.get("id"))] = es
+
+    for sh in shots:
+        stats["shots"] += 1
+        d: dict = {"at": at}
+        try:
+            # D1 referencePlan
+            plan, _warns = build_reference_plan(project, sh)
+            sh["referencePlan"] = plan
+            # D3 dialogLineRefs（有 dialogBeatIds 才重算；舊資料保留原值）
+            dialog_ids = [x for x in (sh.get("dialogBeatIds") or []) if isinstance(x, str)]
+            if dialog_ids:
+                es = es_lookup.get(_s(sh.get("episodeSceneId"))) or {}
+                dlg = scene_dialogue({"es": es})
+                sh["dialogLineRefs"] = storage.dialog_beat_index(dialog_ids, dlg)
+            elif not isinstance(sh.get("dialogLineRefs"), list):
+                sh["dialogLineRefs"] = []
+            # D2 promptEn（三段判定：手改稿保護）
+            stored = _s(sh.get("promptEn"))
+            # 採認旗標持久化在**鏡頭本體**（P2）：`shot.promptAdoptedManual=true` 記住「這份字是
+            # 舊版無旗標手改稿、被衍生流程採認保全的」。只靠 derived.adoptedManual 的話第二輪
+            # 因為 promptEnManual 已為 true 而走①分支 → adopted=False → 前端把「舊版手改稿已保留」
+            # 顯示成「已同步」。使用者按「模板編譯」時由該端點清掉這個旗標。
+            adopted_mark = sh.get("promptAdoptedManual") is True
+            manual = sh.get("promptEnManual") is True
+            auto = (not manual) and (
+                _s(sh.get("derivedFrom")) in PROMPT_AUTO_SOURCES or not stored)
+            # 判定要「跟這次算出的 compiled 比」，所以規則式鏡一律現算一份（編譯是確定性的）
+            compiled = ""
+            if auto or not manual or stored:
+                compiled, _cw, _meta = compile_prompt(project, sh)
+                compiled = _s(compiled)
+            deploy_draft = (_s(sh.get("derivedFrom")) == "deploy" and len(stored) < 800
+                            and "<Picture" not in stored)
+            adopted = False
+            if manual:
+                fresh = stored                                  # ① 手寫稿（有旗標）
+                adopted = adopted_mark                          # 是不是「採認來的」由本體旗標決定
+            elif not stored or stored == compiled or deploy_draft:
+                fresh = compiled                                # ③ 空／同值／部署短草稿 → 重算
+                sh["promptEn"] = compiled
+                sh.pop("promptAdoptedManual", None)             # 已是編譯稿：採認紀錄作廢
+            else:
+                # ② 非空、與編譯稿不同、且沒有旗標 → 舊版前端改的字：採認為手寫稿並保全
+                sh["promptEnManual"] = True
+                sh["promptAdoptedManual"] = True
+                fresh = stored
+                adopted = True
+            new_source = _prompt_source_of(sh)
+            d.update({
+                "promptChars": len(fresh),
+                "promptSource": new_source,
+                # 手寫稿才算「落後」：衍生流程自己算的那份一定是即時的
+                "promptEnStale": bool(new_source == "manual" and stored != compiled),
+                "adoptedManual": adopted,
+                "slots": len(plan.get("slots") or []),
+                "pictures": [int(s["ordinal"]) for s in (plan.get("slots") or [])
+                             if isinstance(s, dict) and isinstance(s.get("ordinal"), int)],
+            })
+            if new_source != "manual":
+                d["promptEnStale"] = False
+            if not adopted:
+                d.pop("adoptedManual", None)
+            else:
+                d["promptEnStale"] = True
+            # D5 孤兒：beatIds 空或全部指向不存在的 beat，且同場次有規則式鏡頭
+            es_id = _s(sh.get("episodeSceneId"))
+            scene_cov = cov.get(es_id) or {}
+            valid = set(scene_cov.get("beatIds") or [])
+            ids = [x for x in (sh.get("beatIds") or []) if isinstance(x, str)]
+            has_rule_shots = any(_s(o.get("derivedFrom")) in PROMPT_AUTO_SOURCES
+                                 for o in (scene_shots.get(es_id) or []) if o is not sh)
+            orphan = bool(es_id in cov and has_rule_shots and not any(i in valid for i in ids))
+            d["orphan"] = orphan
+            d["uncoveredBeats"] = [] if orphan else list(scene_cov.get("missing") or [])
+        except Exception as e:  # noqa: BLE001 — 單鏡失敗不能拖垮整份專案
+            d["error"] = f"{type(e).__name__}: {e}"
+            d.setdefault("promptChars", len(_s(sh.get("promptEn"))))
+            d.setdefault("promptSource", _prompt_source_of(sh))
+            d.setdefault("promptEnStale", False)
+            d.setdefault("slots", len(((sh.get("referencePlan") or {}).get("slots")) or []))
+            d.setdefault("pictures", [])
+            d.setdefault("orphan", False)
+            d.setdefault("uncoveredBeats", [])
+            stats["errors"][_s(sh.get("id"))] = d["error"]
+        sh["derived"] = {k: v for k, v in d.items() if v is not None}
+    return stats

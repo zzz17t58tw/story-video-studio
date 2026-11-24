@@ -306,14 +306,9 @@ async function openProject(slug) {
     state.slug = slug;
     state.project = res.project;
     state.dirty = false;
+    state.shotsNoLocal = false;
     // M12a：後端讀檔時把舊的序號引用換算成 beat id，換算不到的句子會附訊息——要讓使用者看得到
-    const mig = state.project._dialogMigration;
-    if (mig && (mig.notes || []).length) {
-      state.dialogMigrationNotes = mig.notes;
-      setSaveStatus("pending", "台詞引用已自動換算成劇本句子，但有幾筆換算不到（詳見鏡頭卡或劇本頁）");
-    } else {
-      state.dialogMigrationNotes = [];
-    }
+    applyLoadedProjectExtras(state.project);
     setSaveStatus("saved", `已載入 ${clockText()}`);
   } catch (e) {
     setSaveStatus("error", `開專案失敗：${e.message}`);
@@ -335,6 +330,36 @@ async function openProject(slug) {
 }
 
 // ── 導覽 ─────────────────────────────────────────────────
+// M16a：進「鏡頭／生成」頁前先存（使用者可能剛在人物／場景／劇本頁改了字），再整份重抓——
+// 後端 GET 會用當下真相重算 referencePlan／promptEn／derived，所以畫面上的字永遠是最新的。
+async function syncProjectBeforeView(view) {
+  if (!state.slug || !state.project) return;
+  if (state.dirty) {
+    try { await saveNow(); } catch (_) { /* 存不進去也照樣重抓，至少把後端最新的字畫出來 */ }
+  }
+  if (state.dirty) return;   // 存檔失敗：不要用後端舊資料蓋掉使用者未存的編輯
+  try {
+    const res = await api(`/api/projects/${state.slug}`);
+    if (res && res.project) {
+      state.project = res.project;
+      state.dirty = false;
+      state.shotsNoLocal = false;   // 後端給的 no 是真相（補洞鏡會插在場次中間）
+      applyLoadedProjectExtras(res.project);
+    }
+  } catch (_) { /* 重抓失敗就沿用目前的記憶體副本 */ }
+}
+
+// 讀檔時附帶的遷移訊息（openProject 與 syncProjectBeforeView 共用，不要各寫一套）
+function applyLoadedProjectExtras(project) {
+  const mig = project && project._dialogMigration;
+  if (mig && (mig.notes || []).length) {
+    state.dialogMigrationNotes = mig.notes;
+    setSaveStatus("pending", "台詞引用已自動換算成劇本句子，但有幾筆換算不到（詳見鏡頭卡或劇本頁）");
+  } else {
+    state.dialogMigrationNotes = [];
+  }
+}
+
 function setView(view) {
   state.view = view;
   document.querySelectorAll(".nav-btn").forEach((b) =>
@@ -346,6 +371,10 @@ function setView(view) {
     loadAssemblePlan();
     loadOutputs();
     if (mkState.vidJobId && mkState.vidJob && ["queued", "running"].includes(mkState.vidJob.status)) pollVideoBatch();
+  }
+  if ((view === "shots" || view === "generate") && state.slug) {
+    // 先畫一次（使用者不必等），存檔＋重抓回來後再重畫一次
+    syncProjectBeforeView(view).then(() => { if (state.view === view) renderViews(); });
   }
 }
 
@@ -2163,6 +2192,7 @@ function blankShot(no, esId, extra) {
 function addShot(filterEsId) {
   const list = state.project.shots || (state.project.shots = []);
   list.push(blankShot(newShotNo(list), filterEsId || ""));
+  state.shotsNoLocal = true;
   markDirty();
   renderShots();
 }
@@ -2170,6 +2200,7 @@ function removeShot(sh) {
   if (!confirm(`要刪除鏡頭 第 ${sh.no} 鏡（${sh.id}）嗎？之後的鏡頭 no 會自動重排。`)) return;
   const list = state.project.shots;
   list.splice(list.indexOf(sh), 1);
+  state.shotsNoLocal = true;
   markDirty();
   renderShots();
 }
@@ -2180,11 +2211,15 @@ function moveShot(sh, delta) {
   if (to < 0 || to >= list.length) return;
   const [it] = list.splice(idx, 1);
   list.splice(to, 0, it);
+  state.shotsNoLocal = true;
   markDirty();
   renderShots();
 }
 // no 依陣列順序重排成 1..N（不動 id）
 function renumberShots() {
+  // M16a：整份重抓後 shot.no 以後端為準（補洞鏡會插在場次中間，no 不是單純陣列序）；
+  // 只有使用者剛改了陣列（新增／移動／刪除／手動改 no）才用本地序重排。
+  if (!state.shotsNoLocal) return;
   (state.project.shots || []).forEach((sh, i) => { sh.no = i + 1; });
 }
 
@@ -2269,6 +2304,7 @@ function shotCard(sh, idx) {
       class: "badge " + (VIDEO_STATUS_CLASS[sh.video?.status] || "st-none"),
       text: `影片：${VIDEO_STATUS_LABEL[sh.video?.status] || sh.video?.status || "未生成"}`,
     }),
+    sbOrphanBadge(sh),
     el("span", { class: "spacer" }),
     batchShotCheck(sh),
     chatButton("shot", sh.id),
@@ -2395,9 +2431,28 @@ function shotCard(sh, idx) {
 
   // prompts
   const prCard = el("div", { class: "subcard" });
-  prCard.append(el("h4", { text: "提示詞（prompt）" }));
+  prCard.append(el("div", { class: "subcard-head" },
+    el("h4", { text: "提示詞（prompt）" }),
+    el("span", { class: "spacer" }),
+    sbDerivedLine(sh)));
   prCard.append(liveText("中文提示（promptZh，給人看／給模型擴寫）", sh, "promptZh", "這個鏡頭畫面發生什麼事、誰在畫面裡、怎麼拍", { rows: "3" }));
-  prCard.append(liveText("英文提示（promptEn，H3 生成用）", sh, "promptEn", "英文描述；不會寫可按下面「✦ 用欄位組英文草稿」或「⌘ 模板編譯 prompt」", { rows: "4", attrs: { "data-prompt-for": sh.id } }));
+  const enField = liveText("英文提示（promptEn，H3 生成用）", sh, "promptEn", "英文描述；不會寫可按下面「✦ 用欄位組英文草稿」或「⌘ 模板編譯 prompt」", { rows: "4", attrs: { "data-prompt-for": sh.id } });
+  prCard.append(enField);
+  // M16a：使用者自己改了 promptEn → 視為手寫稿（promptEnManual），衍生流程不再覆蓋，
+  // 但卡頭會顯示「⚠ 手動稿已落後」。只認「真的改了字」：與進場時的值比，避免只是點進去看一眼就被鎖住。
+  const enTa = enField.querySelector("textarea");
+  if (enTa) {
+    const before = String(sh.promptEn || "");
+    enTa.addEventListener("change", () => {
+      const now = String(enTa.value || "");
+      if (now === before) return;
+      if (now.trim() && sh.derived && sh.derived.promptSource !== "manual") {
+        sh.promptEnManual = true;
+        markDirty();
+        setSaveStatus("pending", `第 ${sh.no} 鏡的英文提示已改成手寫稿（之後不會被劇本／人物改動覆蓋）`);
+      }
+    });
+  }
   const genEn = el("button", { class: "btn btn-small", type: "button" }, "✦ 用欄位組英文草稿");
   genEn.addEventListener("click", () => {
     if (!confirm("用目前的中文提示與運鏡欄位覆寫英文提示嗎？（純字串拼接，不會呼叫模型）")) return;
@@ -2793,14 +2848,20 @@ function videoGenCard(sh) {
       if (j.status === "done") {
         stopPoll();
         sh.video = { path: j.path, status: "done", taskType: "r2v", seed: j.seed, note: "" };
-        // 後端已存檔；同步 updatedAt 免得下一次自動儲存把 video 蓋回去
+        // M16a：整份重抓（不是只補 video 欄位）——後端這個 job 寫回的 referencePlan／promptEn／
+        // derived 也要進畫面，否則鏡頭卡顯示的字跟實際送出的字又會分岔。
         try {
           const fresh = await api(`/api/projects/${state.slug}`);
-          state.project.meta.updatedAt = fresh.project.meta.updatedAt;
-          const fs = (fresh.project.shots || []).find((x) => x.id === sh.id);
-          if (fs) sh.video = fs.video;
-          state.dirty = false;
-        } catch (_) { /* 拿不到 updatedAt 不影響已落地的影片 */ }
+          if (fresh && fresh.project) {
+            state.project = fresh.project;
+            state.dirty = false;
+            const fs = (fresh.project.shots || []).find((x) => x.id === sh.id);
+            if (fs) sh.video = fs.video;
+            applyLoadedProjectExtras(fresh.project);
+            renderViews();
+            return;   // 已整頁重畫，不必再 paint() 舊節點
+          }
+        } catch (_) { /* 拿不到整份就退回只補影片欄位，至少不要讓畫面卡在「生成中」 */ }
         setSaveStatus("saved", `已生成 ${sh.id} 影片（${j.elapsed} 秒）`);
       } else if (j.status === "failed") {
         stopPoll();
@@ -3166,6 +3227,18 @@ function m3dShotTools(sh) {
         pre, showWarnings(res.warnings));
       status.className = "hint ok-text";
       status.textContent = "已寫回 promptEn。";
+      // 編譯是使用者主動要求「用模板覆蓋」：手寫稿旗標要一起收掉，否則存檔端會把手寫稿
+      // 判成「落後」並在卡片上一直掛警語（編譯結果＝現算值，本來就不是手改稿）。
+      // P3：後端寫回時已清掉 promptEnManual／promptAdoptedManual（回應帶 promptManualCleared），
+      // 這裡同步本地狀態，免得下一次 saveNow() 又把舊旗標帶回存檔端。
+      sh.promptEnManual = false;
+      delete sh.promptAdoptedManual;
+      if (sh.derived && typeof sh.derived === "object") {
+        sh.derived.promptSource = res.promptSource || "compiled";
+        sh.derived.promptEnStale = false;
+        sh.derived.adoptedManual = false;
+      }
+      markDirty();
       const ta = document.querySelector(`textarea[data-prompt-for="${sh.id}"]`);
       if (ta) ta.value = res.promptEn;
       setSaveStatus("saved", `已編譯 ${sh.id} 的 promptEn`);
@@ -3331,14 +3404,20 @@ async function generateShotImage(sh, mode, btns, status, imgCard, logBox) {
       });
     }
     setSaveStatus("saved", `已生成 ${sh.id} 首幀，並寫回 project.json`);
-    // 後端已存檔，但本地副本要同步 meta.updatedAt 才不會被下一次自動儲存蓋回去
+    // M16a：整份重抓（不是只補 images 欄位）——後端這個 job 寫回的 referencePlan／promptEn／
+    // derived 也要進畫面。縮圖已即時換過，這裡只把資料對齊，不整頁重繪（保住捲動與焦點）。
     try {
       const fresh = await api(`/api/projects/${state.slug}`);
-      state.project.meta.updatedAt = fresh.project.meta.updatedAt;
-      const fs = (fresh.project.shots || []).find((x) => x.id === sh.id);
-      if (fs) sh.images = fs.images;
-      state.dirty = false;
-    } catch (_) { /* 拿不到新 updatedAt 不影響已落地的圖 */ }
+      if (fresh && fresh.project) {
+        state.project = fresh.project;
+        state.dirty = false;
+        applyLoadedProjectExtras(fresh.project);
+        // 把最新資料寫回這張卡的 DOM（不重畫整頁）：衍生摘要那一行必須跟著換。
+        const host = document.querySelector(`.shot-card[data-shot-id="${sh.id}"] .sb-derived`);
+        const freshShot = (fresh.project.shots || []).find((x) => x.id === sh.id);
+        if (host && freshShot) host.replaceWith(sbDerivedLine(freshShot));
+      }
+    } catch (_) { /* 拿不到整份不影響已落地的圖 */ }
   } else if (res) {
     st.err = res.error || "生圖失敗（後端沒有給原因）";
     st.busyGpu = (res.gpu && res.gpu.busy) ? res.gpu : null;
@@ -3868,9 +3947,23 @@ function renderShots() {
     const esKey = sh.episodeSceneId || "";
     if (!state.shotFilter && esKey !== lastEs) {
       const f = findEpisodeScene(esKey);
+      const inScene = filtered.filter((x) => (x.episodeSceneId || "") === esKey);
+      // M16a（D5）：同場次的孤兒鏡（beatIds 空／全指向不存在的 beat，且同場有規則式鏡）
+      const orphans = inScene.filter((x) => x.derived && x.derived.orphan === true);
       box.append(el("div", { class: "shot-group-title" },
         el("span", { text: f ? `${f.ep.id}／${esLabel(f.es)}` : "（未指定場次）" }),
-        el("span", { class: "hint", text: ` · ${filtered.filter((x) => (x.episodeSceneId || "") === esKey).length} 鏡` }),
+        el("span", { class: "hint", text: ` · ${inScene.length} 鏡` }),
+        orphans.length
+          ? el("button", {
+            class: "btn btn-small btn-danger sb-rm-orphans", type: "button",
+            "data-scene-id": esKey, "data-orphans": orphans.map((x) => x.id).join(","),
+            title: `這 ${orphans.length} 鏡沒有連動劇本，與同場的規則式鏡頭重複：${orphans.map((x) => x.id).join("、")}（不會自動刪，按了才刪）`,
+            onclick: () => removeOrphanShots(esKey, orphans),
+          }, `移除本場未連動的鏡頭（${orphans.length}）`)
+          : null,
+        orphans.length
+          ? el("span", { class: "hint warn-text", text: " ⚠ 未連動劇本" })
+          : null,
       ));
       lastEs = esKey;
     }
@@ -3881,8 +3974,79 @@ function renderShots() {
   loadStoryboardRows();
 }
 
+// ── M16a：鏡頭卡上的「衍生值摘要」（docs/shots-live-linkage.md §5-3）────────
+// 畫面上的字必須等於 GET 回的字、也等於送件口重編譯的字；這一行就是給人一眼確認的憑據。
+function sbDerivedLine(sh) {
+  const d = sh.derived;
+  if (!d || typeof d !== "object") {
+    // 後端還沒算（舊資料／離線）：退回本地字數，不要顯示假的「已同步」
+    const n = String(sh.promptEn || "").length;
+    return el("span", { class: "sb-derived hint", "data-prompt-chars": String(n),
+      title: "後端尚未提供衍生摘要（重新整理或存檔一次就會補上）" },
+      el("span", { text: n ? `提示詞 ${n} 字（尚未同步）` : "提示詞空白" }));
+  }
+  const n = Number(d.promptChars || 0);
+  const pics = Array.isArray(d.pictures) ? d.pictures.length : Number(d.slots || 0);
+  const stale = d.promptEnStale === true;
+  const isManual = d.promptSource === "manual";
+  const adopted = d.adoptedManual === true;
+  const cls = stale ? "hint warn-text" : "hint ok-text";
+  // adoptedManual：這份是「舊版前端改的字、存檔時才被採認為手寫稿」——保留它，但講清楚出處與更新方法
+  const text = adopted
+    ? `⚠ 舊版手改稿已保留（${n} 字／${pics} 張圖；按「模板編譯」可更新）`
+    : stale ? `⚠ 手動稿已落後（現算 ${d.promptChars ?? n} 字／${pics} 張圖）`
+    : `已同步（${n} 字／${pics} 張圖）${isManual ? " · 手動稿" : ""}`;
+  return el("span", {
+    class: "sb-derived " + cls, "data-prompt-chars": String(n),
+    "data-prompt-source": String(d.promptSource || ""),
+    "data-adopted-manual": adopted ? "1" : "0",
+    title: `衍生值重算於 ${d.at || "—"}${d.error ? `；此鏡重算失敗：${d.error}` : ""}`,
+  }, el("span", { text: text }), d.error ? el("span", { class: "hint err-text", text: ` · ${d.error}` }) : null);
+}
+
+function sbOrphanBadge(sh) {
+  if (!sh.derived || sh.derived.orphan !== true) return null;
+  return el("span", {
+    class: "badge sb-orphan-badge",
+    title: "這鏡沒有引用任何劇本 beat（或引用的 beat 已不存在），而同場次已有規則式鏡頭 → 它不會跟著劇本更新，也不會被劇本覆蓋。建議在場次標題列按「移除本場未連動的鏡頭」。",
+  }, "⚠ 未連動劇本");
+}
+
 function idxOfShot(sh) {
   return (state.project.shots || []).indexOf(sh);
+}
+
+// M16a（D5）：移除「本場未連動劇本」的鏡頭——**一律人手確認**，後端只走既有的整份存檔，
+// 沒有自動刪除、也不碰 media 檔（刪掉的是 project.json 裡的鏡頭條目，檔案留在 media/ 可追）。
+async function removeOrphanShots(esId, orphans) {
+  if (!orphans || !orphans.length) return;
+  const ids = orphans.map((s) => s.id);
+  const f = findEpisodeScene(esId);
+  const title = `${f ? esLabel(f.es) : esId} 的未連動鏡頭`;
+  const refs = [
+    `將刪除 ${ids.length} 鏡：${ids.map((s) => `${s}（第 ${orphans.find((x) => x.id === s).no} 鏡）`).join("、")}`,
+    "這些鏡頭沒有引用任何劇本 beat（或引用的 beat 已不存在），同場已有規則式鏡頭在演同一段。",
+    "只刪 project.json 裡的鏡頭條目；已生成的影格／影片檔案仍留在 media/，不會被刪。",
+  ];
+  const ok = window.SVSConfirm
+    ? await window.SVSConfirm({ title, refs })
+    : window.confirm(`${title}：要刪除 ${ids.join("、")} 嗎？（檔案仍留在 media/）`);
+  if (!ok) return;
+  const list = state.project.shots || [];
+  const keep = list.filter((s) => !(s.episodeSceneId === esId && s.derived && s.derived.orphan === true
+    && ids.includes(s.id)));
+  const removed = list.length - keep.length;
+  if (!removed) return;
+  state.project.shots = keep;
+  renumberShots();
+  markDirty();
+  renderShots();
+  try {
+    await saveNow();
+    setSaveStatus("saved", `已移除 ${removed} 個未連動鏡頭（${clockText()}）`);
+  } catch (e) {
+    setSaveStatus("error", `移除後存檔失敗：${e.message}`);
+  }
 }
 
 // ── M3d：全專案機械校驗 ───────────────────────────────────────
