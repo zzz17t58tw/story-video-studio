@@ -310,7 +310,10 @@ def _group_character_ids(project: dict, es: dict, group: dict, role: str) -> lis
         return beat_chars
     if role == "insert":
         return []                    # 插入鏡＝細節／物件，不帶人
-    return list(es_chars)
+    # v0.9.22：整組 beat 都沒指名角色＝空景（環境／物件／空鏡），**不要再退回場次名單**。
+    # 實測 sh01「店內空鏡」就是被這行塞進 c01+c02，H3 於是把白衣女子畫進空店裡
+    # （使用者第一眼看就抓到）。空鏡只能靠文字＋場景參考圖。
+    return []
 
 
 def _who_names(project: dict, ids: list[str]) -> str:
