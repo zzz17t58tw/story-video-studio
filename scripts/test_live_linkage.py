@@ -1,4 +1,4 @@
-"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T10，逐條印 PASS/FAIL 與實測數字。
+"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T11，逐條印 PASS/FAIL 與實測數字。
 
 規格：docs/shots-live-linkage.md §6。**只在複本上跑**，絕不寫 dist/StoryVideoStudio/projects 正本。
 
@@ -749,8 +749,61 @@ print(json.dumps({"created": r.get("created"), "chains": chains, "v1": v1,
     record("T10 backfill 後 V1 不得是 warn、chain == want", ok, detail)
 
 
+# ── T11：backfill 前後既有鏡相對順序不變、無 beatIds 的手動鏡排最後 ──────────
+def t11() -> None:
+    """§8.2 排序鐵律的機械驗收（T3 被 /storyboard/build 回 400 擋下的真因）。
+
+    對複本的 e01s03 跑 backfill_shots()（會新建 sh29 補 b05），斷言：
+    ① 既有鏡頭在陣列中的相對順序不變（排除新建鏡後取 index 序列比對）；
+    ② beatIds 為空的既有鏡（實測 sh25–sh28）全部排在 e01s01 有 beatIds 的鏡之後；
+    ③ sh01 仍是 e01s01 的第一支有 beatIds 的鏡（合約 V5 才有機會成立）。
+    """
+    fresh_copy()
+    env = dict(os.environ, SVS_DATA_DIR=str(WORK_PROJECTS), PYTHONIOENCODING="utf-8")
+    code = r"""import json
+from app import storage, storyboard
+SLUG = %r
+p = storage.load_project(SLUG)
+before = [s["id"] for s in p["shots"]]
+r = storyboard.backfill_shots(p, ["e01s03"])
+after = [s["id"] for s in p["shots"]]
+made = list(r.get("created") or [])
+kept = [x for x in after if x not in set(made)]
+s01 = [s for s in p["shots"] if s.get("episodeSceneId") == "e01s01"]
+withb = [s["id"] for s in s01 if [x for x in (s.get("beatIds") or []) if isinstance(x, str)]]
+without = [s["id"] for s in s01 if not [x for x in (s.get("beatIds") or []) if isinstance(x, str)]]
+idx_w = {s["id"]: i for i, s in enumerate(s01)}
+last_with = max((idx_w[x] for x in withb), default=-1)
+first_without = min((idx_w[x] for x in without), default=10 ** 6)
+print(json.dumps({
+    "created": made,
+    "orderKept": kept == before,
+    "before": before, "afterKept": kept,
+    "s01": [[s["id"], s["no"], s.get("beatIds"), s.get("role")] for s in s01],
+    "withBeatIds": withb, "withoutBeatIds": without,
+    "noBeatIdsAfter": first_without > last_with,
+    "firstWithBeatIds": withb[0] if withb else None,
+}, ensure_ascii=False))
+""" % SLUG
+    r = subprocess.run([str(PY), "-c", code], cwd=str(REPO), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, f"T11 子行程失敗：{r.stderr[-600:]}"
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+    ok1 = o["orderKept"]
+    ok2 = bool(o["withoutBeatIds"]) and o["noBeatIdsAfter"]
+    ok3 = o["firstWithBeatIds"] == "sh01"
+    ok = bool(o["created"]) and ok1 and ok2 and ok3
+    s01_txt = "、".join(f"{sid}(no={no},{'∅' if not bids else '/'.join(bids)},{role})"
+                        for sid, no, bids, role in o["s01"])
+    record("T11 backfill 後既有鏡相對順序不變＋無 beatIds 手動鏡排在最後", ok,
+           f"created={o['created']}；既有 {len(o['before'])} 鏡相對順序不變={ok1}"
+           f"（{'同序' if ok1 else '前：' + ','.join(o['before']) + ' 後：' + ','.join(o['afterKept'])}）；"
+           f"e01s01 有 beatIds {o['withBeatIds']} vs 無 beatIds {o['withoutBeatIds']} → "
+           f"無的全部在後={o['noBeatIdsAfter']}；第一支有 beatIds={o['firstWithBeatIds']}；"
+           f"e01s01 (id,no,beatIds,role)={s01_txt}")
+
+
 # ── main ──────────────────────────────────────────────────────────
-ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"]
+ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11"]
 
 
 def main() -> int:

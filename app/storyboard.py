@@ -768,15 +768,20 @@ def backfill_shots(project: dict, scene_ids: list[str] | None = None) -> dict:
             out["created"].append(nid)
             out["scenes"][es_id]["created"].append(nid)
 
-    # 全專案排序：依場次順序；場次內依「第一個 beat 在劇本的位置」，
-    # 沒有 beatIds 的（舊手動鏡／重複鏡）排在該場次最前面一組，組內維持原相對順序。
+    # 全專案排序（§8.2 鐵律）：依場次順序；場次內依「第一個 beat 在劇本的位置」，
+    # **沒有有效 beatIds 的既有鏡（舊手動／重複／孤兒鏡）排該場次所有有 beatIds 的鏡之後**，
+    # 組內維持原相對順序（orig_order）。曾經把它們排最前面（pos=-1）→ sh25–sh28 從 no=5…8
+    # 跳到 no=1…4、sh01(establish) 變第 5 鏡 → 合約 V5 必炸 → /storyboard/build 回 400 擋下補鏡。
+    # 分組鍵用 0／1 旗標：有 beatIds 的整組在前、無的整組在後，且只有組內才比 pos／原順序。
     def _key(s: dict) -> tuple:
         ids = [x for x in (s.get("beatIds") or []) if isinstance(x, str)]
         es_id = _s(s.get("episodeSceneId"))
         es_obj = _find_es(project, es_id) or {}
         order = {str(b.get("id")): i for i, b in enumerate(scene_beats(es_obj))}
-        pos = min((order.get(x, 10 ** 6) for x in ids), default=-1)
-        return (all_es_order.get(es_id, len(all_es_order)), pos, orig_order.get(id(s), 10 ** 9),
+        # 只有「真的指到本場次 beat」才算有效引用；指到不存在的 id 視同沒有 beatIds
+        pos = min((order[x] for x in ids if x in order), default=None)
+        return (all_es_order.get(es_id, len(all_es_order)), 0 if pos is not None else 1,
+                pos if pos is not None else 0, orig_order.get(id(s), 10 ** 9),
                 0 if _s(s.get("derivedFrom")) == "manual" else 1,
                 int(s.get("no") or 0))
 
