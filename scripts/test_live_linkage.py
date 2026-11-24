@@ -472,24 +472,39 @@ def _cdp_run(ws_url: str):
         time.sleep(0.5)
     time.sleep(1.5)
     # 開專案 → 切到鏡頭頁（setView 會先存再整份重抓）
+    if os.environ.get("SVS_T6_ORPHANS"):
+        # 額外驗「場次標題的移除未連動鏡頭」按鈕存在且列出正確 id（不真的按下去）
+        js("(async () => { await openProject('%s'); await setView('shots'); })()" % SLUG, await_promise=True)
+        time.sleep(2.0)
+        got = js("""(() => { const b = document.querySelector('.shot-group-title .sb-rm-orphans');
+            return JSON.stringify(b ? {text: b.textContent, ids: b.dataset.orphans, scene: b.dataset.sceneId} : null); })()""")
+        print("  孤兒移除按鈕：", got, flush=True)
+        return (True, f"孤兒按鈕 {got}")
     js("(async () => { await openProject('%s'); await setView('shots'); })()" % SLUG, await_promise=True)
     time.sleep(2.0)
-    data = js("""JSON.stringify({
+    # app.js 是傳統 script（頂層 const 不掛到 window），所以用 eval 取同一個頂層 scope 的 state
+    dump = js("""(() => {
+        const st = (0, eval)('typeof state !== "undefined" ? state : null');
+        return JSON.stringify({
         cards: [...document.querySelectorAll('#view-shots .shot-card')].map(c => ({
           id: c.dataset.shotId,
           promptLens: [...c.querySelectorAll('.sb-derived')].map(n => n.dataset.promptChars || ''),
-          text: [...c.querySelectorAll('.prompt-box, pre, textarea')].map(n => (n.value !== undefined ? n.value : n.textContent)),
           derivedText: [...c.querySelectorAll('.sb-derived')].map(n => n.textContent),
+          taLens: [...c.querySelectorAll('textarea[data-prompt-for]')].map(n => (n.value || '').length),
         })),
         errors: window.__errors || [], consoleErr: window.__consoleErr || [],
-        view: window.state && window.state.view,
-        shotCount: (window.state.project && window.state.project.shots || []).length,
-      })""")
-    info = json.loads(data)
+        view: st && st.view,
+        shotCount: (st && st.project && st.project.shots || []).length,
+      }); })()""")
+    if not dump:
+        probe = js("JSON.stringify({ready: document.readyState, title: document.title, stateType: typeof window.state, cards: document.querySelectorAll('.shot-card').length, errors: window.__errors, cerr: window.__consoleErr})")
+        raise RuntimeError("頁面評估回空（JS 例外或頁面還沒就緒）：" + str(probe)[:600])
+    info = json.loads(dump)
     p = project()
     shs = shots_by_id(p)
     bad = []
     shown = 0
+    ta_bad = 0
     for c in info["cards"]:
         sid = c["id"]
         want = len((shs.get(sid) or {}).get("promptEn") or "")
@@ -499,12 +514,17 @@ def _cdp_run(ws_url: str):
             continue
         shown += 1
         if lens[0] != want:
-            bad.append(f"{sid} 顯示 {lens[0]} 字 ≠ GET {want} 字")
+            bad.append(f"{sid} 卡片摘要 {lens[0]} 字 ≠ GET {want} 字")
+        # 卡片上的 promptEn 輸入框內容也必須逐字等於 GET 回的值（畫面上的字＝API 回的字）
+        tas = [int(x) for x in c.get("taLens") or []]
+        if not tas or tas[0] != want:
+            ta_bad += 1
+            bad.append(f"{sid} promptEn 輸入框 {tas} 字 ≠ GET {want} 字")
     errs = [e for e in (info["errors"] + info["consoleErr"]) if e]
     ok = (not bad and not errs and shown == len(shs) and info.get("view") == "shots"
           and info.get("shotCount") == len(shs))
-    detail = (f"鏡頭卡 {shown}/{len(shs)} 張有顯示字數、長度全等={not bad}；"
-              f"view={info.get('view')}；console/JS 錯誤 {len(errs)} 筆"
+    detail = (f"鏡頭卡 {shown}/{len(shs)} 張有衍生摘要、摘要字數全等={not bad}、"
+              f"promptEn 輸入框字數全等={not ta_bad}；view={info.get('view')}；console/JS 錯誤 {len(errs)} 筆"
               + (f"；不一致：{'; '.join(bad[:3])}" if bad else "")
               + (f"；錯誤樣本：{errs[:2]}" if errs else ""))
     return ok, detail
