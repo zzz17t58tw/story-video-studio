@@ -1,7 +1,7 @@
 ---
-branch: m16-live-link
+branch: feat/m16-live-link
 milestone: M16
-status: wip            # wip | ready | merged
+status: merged         # wip | ready | merged（已以 --no-ff 合入 main，v0.9.22 發佈）
 opened: 2026-11-24 18:52（台北）
 files: ["app/server.py", "app/h3compose.py", "app/storyboard.py", "static/app.js", "scripts/test_live_linkage.py", "docs/handoff/m16-live-link.md"]
 ---
