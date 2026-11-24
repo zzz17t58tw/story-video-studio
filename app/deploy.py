@@ -936,9 +936,91 @@ def _land_script(project: dict, sp: dict) -> tuple[dict, dict, dict]:
     return ep_out, id_map, beat_id_map
 
 
+def _align_beats_with_storyboard(project: dict, shots: list[dict], id_map: dict) -> list[dict]:
+    """v0.9.20：用分鏡規則骨架補齊 beatIds（修「部署只挑台詞、動作 beat 沒鏡頭」）。
+
+    為什麼（使用者 2026-11-24：「這什麼問題，該修就修」）：
+      模型的 JSON 只會回 dialogLineRefs（台詞），動作 beat 永遠不會被任何鏡頭引用，
+      所以 `validate` 的 V1（鏡頭 beatIds 串接＝場次全部 beats）對每一份部署資料都報
+      error，而且「影片看不出在演什麼」的根因就是動作沒被演。
+
+    做法：骨架由 `app/storyboard.build_scene_shots()`（純規則、零 token）決定——
+      每鏡演哪些 beats、多長、什麼職責；模型只負責文字（promptZh／promptEn／spec）。
+      對應方式＝模型的 dialogBeatIds 命中哪個骨架組最多，就把文字貼到那一組；
+      對不到的組用骨架自己的草稿（`storyboardFilled=True` 以便 UI 看得出來）。
+
+    失敗一律退回原輸入（舊行為），不讓部署因為這個補齊而整批失敗。
+    """
+    try:
+        from app import storyboard as sb
+    except Exception:
+        return shots
+
+    by_es: dict[str, list[dict]] = {}
+    for sh in shots:
+        raw = sh.get("episodeSceneId")
+        eid = id_map.get(raw, raw)
+        by_es.setdefault(str(eid), []).append(sh)
+
+    aligned: list[dict] = []
+    for eid, group in by_es.items():
+        try:
+            skel = sb.build_scene_shots(project, eid)
+        except Exception:
+            aligned.extend(group)
+            continue
+        groups = skel.get("shots") or []
+        if not groups:
+            aligned.extend(group)
+            continue
+
+        beat_to_group: dict[str, int] = {}
+        for gi, g in enumerate(groups):
+            for bid in (g.get("beatIds") or []):
+                beat_to_group[str(bid)] = gi
+
+        picked: dict[int, dict] = {}
+        for sh in group:
+            votes: dict[int, int] = {}
+            for bid in (sh.get("dialogBeatIds") or []):
+                gi = beat_to_group.get(str(bid))
+                if gi is not None:
+                    votes[gi] = votes.get(gi, 0) + 1
+            if not votes:
+                continue
+            gi = max(votes, key=lambda k: votes[k])
+            picked.setdefault(gi, sh)      # 一組只收一個模型鏡，避免 beatIds 重複
+
+        for gi, g in enumerate(groups):
+            src = picked.get(gi) or {}
+            aligned.append({
+                "episodeSceneId": g.get("episodeSceneId") or eid,
+                "sceneId": g.get("sceneId") or src.get("sceneId"),
+                "characterIds": src.get("characterIds") or g.get("characterIds") or [],
+                "spec": src.get("spec") or g.get("spec") or {},
+                "durationSec": g.get("durationSec"),
+                "promptZh": src.get("promptZh") or g.get("promptZh") or "",
+                "promptEn": src.get("promptEn") or "",
+                "beatIds": list(g.get("beatIds") or []),
+                "role": g.get("role"),
+                "dialogBeatIds": list(g.get("dialogBeatIds") or []),
+                "dialogLineRefs": list(g.get("dialogLineRefs") or []),
+                "padSec": g.get("padSec") or 0,
+                "beatPart": g.get("beatPart"),
+                "storyboardFilled": not bool(picked.get(gi)),
+            })
+    return aligned
+
+
 def _land_shots(project: dict, ep_out: dict, sp: dict, shots: list[dict], id_map: dict,
                 beat_id_map: dict | None = None) -> list[str]:
     """把某一場的鏡頭寫進 project（no 重排）。"""
+    # v0.9.20：模型分鏡只挑台詞 beat → 先用規則骨架補齊動作 beat（否則 V1 必報 error）
+    if shots:
+        try:
+            shots = _align_beats_with_storyboard(project, shots, id_map)
+        except Exception:
+            pass
     shots_now = project.get("shots")
     if not isinstance(shots_now, list):
         shots_now = project["shots"] = []
