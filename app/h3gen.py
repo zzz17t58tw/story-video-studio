@@ -1147,11 +1147,17 @@ def video_preset(opts: dict | None = None) -> dict:
     opts = opts or {}
     width = _clamp_int(opts.get("width"), 32, 8192, 720)
     height = _clamp_int(opts.get("height"), 32, 8192, 1280)
-    frames = legal_frames(_clamp_int(opts.get("frames"), 5, 100000, 121))
     steps = _clamp_int(opts.get("steps"), 1, 60, int(VIDEO_GEN_DEFAULTS["steps"]))
     cfg = _clamp_float(opts.get("cfg"), 0.0, 30.0, float(VIDEO_GEN_DEFAULTS["cfg"]))
-    out = {"width": width, "height": height, "frames": frames, "steps": steps, "cfg": cfg,
-           "durationSec": round(frames / FRAME_RATE, 3)}
+    out = {"width": width, "height": height, "steps": steps, "cfg": cfg}
+    # v0.9.22：使用者沒指定 frames 時**不要塞預設值**——讓 build_timeline 依 shot.durationSec
+    # 推算（12 秒的鏡才是 12 秒）。以前這裡一律塞 121 幀＝5 秒，分鏡表寫 12 秒的鏡
+    # 生出來只有 5 秒，台詞一定唸不完（V4 變成裝飾）。
+    frames = opts.get("frames")
+    if frames not in (None, ""):
+        legal = legal_frames(_clamp_int(frames, 5, 100000, 121))
+        out["frames"] = legal
+        out["durationSec"] = round(legal / FRAME_RATE, 3)
     for k in ("shiftVideo", "shiftAudio", "sampler", "scheduler"):
         if opts.get(k) not in (None, ""):
             out[k] = opts[k]
@@ -1192,8 +1198,14 @@ def _vb_precheck(project: dict, shot_id: str, opts: dict) -> tuple[bool, str, li
     if shot is None:
         return False, f"找不到鏡頭 {shot_id}", []
     if not _s(shot.get("promptEn")):
-        return False, ("這鏡沒有提示詞（promptEn 空白）：請先寫提示詞或按「模板編譯 prompt」"
-                       "（有寫提示詞的話，可能是只填了空白字元）"), []
+        # v0.9.21：promptEn 空不等於送不出——送件口會自動用模板編譯（使用者定調：不擋人）
+        try:
+            _compiled, _cw, _meta = _h3compose().compile_prompt(project, shot)
+        except Exception:  # noqa: BLE001
+            _compiled = ""
+        if not _s(_compiled):
+            return False, ("這鏡沒有可用的提示詞：promptEn 空白，模板編譯也產不出來"
+                           "（通常是人物卡與場景卡都沒內容）"), []
     try:
         refs, warns, _notes = collect_refs(project, shot, allow_first_frame=bool(opts.get("useFirstFrame", True)))
     except H3GenError as e:
