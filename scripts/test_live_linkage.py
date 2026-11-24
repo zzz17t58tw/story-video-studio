@@ -1,4 +1,4 @@
-"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T8，逐條印 PASS/FAIL 與實測數字。
+"""鏡頭頁即時連動 v1（M16a）驗收腳本：T1–T10，逐條印 PASS/FAIL 與實測數字。
 
 規格：docs/shots-live-linkage.md §6。**只在複本上跑**，絕不寫 dist/StoryVideoStudio/projects 正本。
 
@@ -67,6 +67,16 @@ def project() -> dict:
     code, res = http("GET", f"/api/projects/{SLUG}")
     assert code == 200, f"GET 專案失敗 {code}: {res}"
     return res["project"]
+
+
+def disk_shots() -> dict:
+    """**磁碟原值**的 shots（繞過 GET 的衍生重算），給需要「存檔前真相」的斷言用。
+
+    GET 會在 deepcopy 上跑 refresh_derived，手改稿在那裡就已經被補上旗標——要驗「無旗標原值
+    存檔也不流失」，只能比對存檔前的磁碟值。
+    """
+    pj = json.loads((WORK_PROJECTS / SLUG / "project.json").read_text(encoding="utf-8"))
+    return {s.get("id"): s for s in (pj.get("shots") or []) if isinstance(s, dict)}
 
 
 def shots_by_id(p: dict) -> dict:
@@ -602,8 +612,145 @@ def h3gen_timeline(p: dict, shot_id: str) -> dict:
     return h3gen.build_timeline(p, shot, {})
 
 
+# ── T9：舊版手改稿（非空、無旗標、與 compiled 不同）存檔後原封不動 ──────
+def t9() -> None:
+    """舊版前端改 promptEn 不打 promptEnManual 旗標 → 第一次存檔就被 refresh_derived 吃掉。
+
+    F1 的修法：存檔時若「非空、與這次算出的 compiled 不同、且沒有旗標」就採認為手寫稿。
+    驗兩件事：(a) 那種稿子存一次後一字不差、旗標補上、derived 標 manual/adoptedManual/stale；
+    (b) 「非空、無旗標、與 compiled 相同」的鏡頭存檔後維持**非**手寫稿（它本來就是衍生值，
+    該繼續跟著真相走，不能被誤凍結）。
+
+    用裸存檔（storage.save_project 直呼）來驗，不走 PUT 的瘦身副本：save 端看到的就是磁碟
+    原值，這正是「舊版前端留下無旗標改字」的真實形狀。瘦身 PUT 會剔掉真相欄位、讓某些鏡頭的
+    編譯稿改變，那是 PUT 本身的語意，不是這條要驗的東西。
+    """
+    fresh_copy()
+    env = dict(os.environ, SVS_DATA_DIR=str(WORK_PROJECTS), PYTHONIOENCODING="utf-8")
+    code = r"""import json
+from app import storage, h3compose
+SLUG = %r
+p = storage.load_project(SLUG)
+h3c = h3compose
+def recompiles(pr, sh):
+    from app import h3gen
+    try:
+        refs, _w, notes = h3gen.collect_refs(pr, sh)
+        sendable = h3gen._sendable_ordinals(refs, notes)
+    except Exception:
+        notes = {}
+    c, _w2, _m = h3c.compile_prompt(pr, sh, bool((notes or {}).get("firstFrameAsPicture")))
+    return (sh.get("promptEn") or "") == c
+
+raw = {s["id"]: s for s in p["shots"]}
+manual_sid = next((sid for sid, s in sorted(raw.items())
+                   if s.get("promptEnManual") is not True
+                   and str(s.get("promptEn") or "").strip()
+                   and not recompiles(p, s)), "")
+same_sid = next((sid for sid, s in sorted(raw.items())
+                 if s.get("promptEnManual") is not True
+                 and str(s.get("promptEn") or "").strip()
+                 and recompiles(p, s)), "")
+out = {"manualSid": manual_sid, "sameSid": same_sid,
+       "manualLen": len(str((raw.get(manual_sid) or {}).get("promptEn") or "")),
+       "sameLen": len(str((raw.get(same_sid) or {}).get("promptEn") or ""))}
+if not manual_sid:
+    print(json.dumps(out, ensure_ascii=False)); raise SystemExit(0)
+# 規格點名的實測鏡（sh10）：非空、無旗標、與 compiled 不同、主體是「塞蕾娜」→ 存檔後必須一字不動
+out["sh10Len"] = len(str((raw.get("sh10") or {}).get("promptEn") or ""))
+out["sh10FlagBefore"] = (raw.get("sh10") or {}).get("promptEnManual")
+out["sh10IsManualCand"] = ("sh10" in raw and out["sh10FlagBefore"] is not True
+                           and out["sh10Len"] > 0 and not recompiles(p, raw["sh10"]))
+mtext = str(raw[manual_sid].get("promptEn") or "")
+stext = str((raw.get(same_sid) or {}).get("promptEn") or "")
+storage.save_project(SLUG, p)
+q = storage.load_project(SLUG)
+shs = {s["id"]: s for s in q["shots"]}
+t = shs.get(manual_sid) or {}
+d = t.get("derived") or {}
+out["manualAfter"] = len(str(t.get("promptEn") or ""))
+out["manualKept"] = str(t.get("promptEn") or "") == mtext
+out["manualFlag"] = t.get("promptEnManual") is True
+out["adopted"] = d.get("adoptedManual") is True
+out["source"] = d.get("promptSource")
+out["stale"] = d.get("promptEnStale") is True
+out["chars"] = d.get("promptChars")
+out["sh10After"] = len(str((shs.get("sh10") or {}).get("promptEn") or ""))
+out["sh10Kept"] = bool(out["sh10IsManualCand"]) and str((shs.get("sh10") or {}).get("promptEn") or "") \
+    == str((raw.get("sh10") or {}).get("promptEn") or "")
+if same_sid:
+    s2 = shs.get(same_sid) or {}
+    out["sameAfter"] = len(str(s2.get("promptEn") or ""))
+    out["sameKept"] = str(s2.get("promptEn") or "") == stext
+    out["sameFlag"] = s2.get("promptEnManual") is True
+    out["sameAdopted"] = (s2.get("derived") or {}).get("adoptedManual") is True
+# 再存一次：已保全的稿子第二輪不得被改
+p2 = storage.load_project(SLUG)
+storage.save_project(SLUG, p2)
+out["again"] = str(({s["id"]: s for s in storage.load_project(SLUG)["shots"]}.get(manual_sid) or {})
+                   .get("promptEn") or "")
+print(json.dumps(out, ensure_ascii=False))
+""" % SLUG
+    r = subprocess.run([str(PY), "-c", code], cwd=str(REPO), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, f"T9 子行程失敗：{r.stderr[-600:]}"
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+    ok = (bool(o["manualSid"]) and o.get("manualKept") and o.get("manualFlag") and o.get("adopted")
+          and o.get("source") == "manual" and o.get("stale") and o.get("chars") == o["manualLen"]
+          and o.get("sh10IsManualCand") and o.get("sh10Kept")
+          and o.get("again") == str((disk_shots().get(o["manualSid"]) or {}).get("promptEn") or "")
+          and (not o["sameSid"] or (o.get("sameKept") and not o.get("sameFlag")
+                                    and not o.get("sameAdopted"))))
+    record("T9 舊版手改稿（非空／無旗標／≠compiled）存檔後一字不動，同值非手動", ok,
+           f"手改稿鏡 {o['manualSid']}：{o['manualLen']} 字 → {o.get('manualAfter')} 字、逐字相同={o.get('manualKept')}、"
+           f"promptEnManual={o.get('manualFlag')}、adoptedManual={o.get('adopted')}、"
+           f"promptSource={o.get('source')}、promptEnStale={o.get('stale')}、"
+           f"derived.promptChars={o.get('chars')}；存第二次仍為同一份={o.get('again') == str((disk_shots().get(o['manualSid']) or {}).get('promptEn') or '')}；"
+           f"sh10 {o.get('sh10Len')} 字 → {o.get('sh10After')} 字、逐字相同={o.get('sh10Kept')}；"
+           f"對照鏡（非空＝compiled）{o['sameSid'] or '（母本無此鏡）'}：{o['sameLen']} 字 → {o.get('sameAfter')} 字、"
+           f"維持原值={o.get('sameKept')}、未被標 manual={not o.get('sameFlag')}、adoptedManual={o.get('sameAdopted')}")
+
+
+# ── T10：backfill 後 V1 不得是 warn，且 chain == want ────────────────
+def t10() -> None:
+    fresh_copy()
+    env = dict(os.environ, SVS_DATA_DIR=str(WORK_PROJECTS), PYTHONIOENCODING="utf-8")
+    code = r"""import json
+from app import storage, storyboard, h3compose
+SLUG = %r
+p = storage.load_project(SLUG)
+r = storyboard.backfill_shots(p)
+storage.save_project(SLUG, p)
+p = storage.load_project(SLUG)
+v = h3compose.validate_project(p)
+chains = {}
+for ep in (p.get("script") or {}).get("episodes") or []:
+    for es in ep.get("scenes") or []:
+        want = [str(b.get("id")) for b in (es.get("beats") or []) if isinstance(b, dict) and not b.get("_skipped")]
+        ss = sorted([s for s in p["shots"] if s.get("episodeSceneId") == es.get("id")], key=lambda s: int(s.get("no") or 0))
+        chain = [x for s in ss for x in (s.get("beatIds") or [])]
+        chains[es.get("id")] = {"chain": chain, "want": want, "equal": chain == want}
+v1 = [{"level": i["level"], "msg": i["message"][:160]} for i in v["issues"] if "（合約 V1）" in i["message"]]
+print(json.dumps({"created": r.get("created"), "chains": chains, "v1": v1,
+                  "counts": v["counts"]}, ensure_ascii=False))
+""" % SLUG
+    r = subprocess.run([str(PY), "-c", code], cwd=str(REPO), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, f"backfill 子行程失敗：{r.stderr[-600:]}"
+    info = json.loads(r.stdout.strip().splitlines()[-1])
+    v1 = info["v1"]
+    v1_warn = [x for x in v1 if x["level"] != "error"]
+    all_equal = all(c["equal"] for c in info["chains"].values())
+    ok = bool(info["created"]) and not v1_warn and all_equal
+    detail = (f"backfill created={info['created']}；"
+              + "；".join(f"{k} {'=' if c['equal'] else '≠'}" for k, c in info["chains"].items())
+              + f"；V1 問題 {len(v1)} 筆（warn {len(v1_warn)} 筆，必須為 0）"
+              + (f"；{v1_warn[:2]}" if v1_warn else "")
+              + ("" if all_equal else f"；不等的場次：{[k for k, c in info['chains'].items() if not c['equal']]}"
+                 + str([c for c in info["chains"].values() if not c["equal"]][:1])))
+    record("T10 backfill 後 V1 不得是 warn、chain == want", ok, detail)
+
+
 # ── main ──────────────────────────────────────────────────────────
-ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"]
+ALL = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"]
 
 
 def main() -> int:
