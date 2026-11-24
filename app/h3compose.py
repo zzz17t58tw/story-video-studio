@@ -459,7 +459,7 @@ def _nonspace_len(text: Any) -> int:
 def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
     """契約 §4 的 V1／V4／V5（V2 在①、V3 在③）。純邏輯，不動資料。
 
-    V1 順序覆蓋：場次內 shots（依 no）的 beatIds 串接＝該場次 beats（排除 _skipped）。
+    V1 順序覆蓋：場次內 shots（依 no）的 beatIds 串接＝該場次 beats（排除 _skipped），不符一律 error。
       舊專案（沒有 beatIds 也沒有 dialogBeatIds）不報 error，只給 warn「此場次尚未分鏡」。
     V4 台詞唸得完：durationSec - padSec ≥ 台詞字數 / 4.5。
     V5 職責一致：dialogue 必含 ≥1 dialogue beat；establish 只能場次第一鏡且不含台詞；
@@ -492,7 +492,6 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 covered_all |= set(ids_s)
             unshot = [b for b in beats if str(b.get("id")) and str(b.get("id")) not in covered_all]
             unshot_lines = [b for b in unshot if _s(b.get("type") or "dialogue") != "action"]
-            unshot_line_issue: dict | None = None   # M16a：補鏡後若剛好覆蓋，這條要收回
             if es_shots and not has_any_ref:
                 # 舊專案：整場都沒引用任何 beat → 不當錯誤擋人（V1 不誤傷舊資料）
                 issues.append(_issue("warn", "episodeScene", es_id,
@@ -505,11 +504,10 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
             if unshot_lines and not unshot and _covered_has_line:
                 # 整場的 beat 都被演到，但台詞一句都沒引用 → 分鏡只演了畫面（V2 的主體會接手報）
                 active_lines = [b for b in beats if _s(b.get("type") or "dialogue") != "action"]
-                unshot_line_issue = _issue(
+                issues.append(_issue(
                     "error", "episodeScene", es_id,
                     f"這一場有 {len(active_lines)} 句台詞沒有任何鏡頭引用"
-                    f"（{'、'.join(str(b.get('id')) for b in active_lines)}）", label)
-                issues.append(unshot_line_issue)
+                    f"（{'、'.join(str(b.get('id')) for b in active_lines)}）", label))
             elif unshot:
                 # 有動作／台詞 beat 沒有鏡頭 → 品質提醒（不擋生成），要講清楚是哪幾個
                 issues.append(_issue("warn", "episodeScene", es_id,
@@ -526,13 +524,11 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 continue
 
             # ── V1 順序覆蓋 ──
-            # M16a：補鏡（storyboard.backfill_shots）會把新鏡插在「第一個 beat 在劇本裡的位置」，
-            # 場次內鏡號的排列因此可能是 b01／b99／b02／b05／b03／b04 這種「劇本順序不同的
-            # 補洞鏡」——洞還小的時候硬報 error 等於逼使用者 force 重建整場，正是本契約要消滅的
-            # 東西。所以：整場恰好覆蓋（同一顆 beat 只被引用一次、集合與劇本相同）但有補洞鏡時，
-            # 降為 warn 並講清楚是哪幾鏡；真的漏句／重複／引用到不存在的 beat 仍照舊報 error。
+            # chain（場次內依鏡號串接的 beatIds）必須完全等於劇本 beats 的順序，不符一律 error。
+            # 這條不放寬：成品播放順序就靠鏡號，順序排錯卻是黃字等於讓使用者帶著錯片出貨。
+            # （storyboard.backfill_shots 會把補洞鏡插在「第一個 beat 在劇本裡的位置」，
+            #  補完後 chain 自然回到劇本順序——實測 e01s03 → b01/b02/b05/b03/b04，與 want 相同。）
             chain: list[str] = []
-            chain_shots: list[dict] = []
             other_scene_beats: set[str] = set()
             for s in shots:
                 if s.get("episodeSceneId") != es_id:
@@ -549,7 +545,6 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                             + "（合約 V1）", f"第 {s.get('no')} 鏡"))
                         continue
                     chain.append(bid)
-                    chain_shots.append(s)
             if chain != want:
                 # 找出第一處不一致，訊息要能直接指路
                 first = next((i for i in range(min(len(chain), len(want))) if chain[i] != want[i]), None)
@@ -561,30 +556,12 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                 else:
                     extra = [b for b in chain if b not in want]
                     dup = sorted({b for b in chain if chain.count(b) > 1})
-                    detail = ("重複引用：" + "、".join(dup)) if dup else ("多出不在劇本的 beat：" + "、".join(extra))
-                # M16a：整場「恰好覆蓋」（每顆 beat 只被引用一次、集合與劇本相同）只是鏡號順序
-                # 被補洞鏡打散 → 降為 warn。漏句／重複／多出 beat 仍照舊報 error。
-                exact_cover = (len(chain) == len(want) and len(chain) == len(set(chain))
-                               and set(chain) == set(want))
-                # 補洞鏡插在場次中間時，「漏句」與「V1 順序」是同一個洞的兩面說法：
-                # 洞已經被補上（恰好覆蓋）就不要再報「哪一句沒覆蓋」——那是補鏡前的事實。
-                if exact_cover and unshot_line_issue is not None:
-                    issues.remove(unshot_line_issue)
-                    unshot_line_issue = None
-                if exact_cover:
-                    backfill_ids = [str(s.get("id")) for s in chain_shots
-                                    if _s(s.get("fillReason")) == "backfill"]
-                    issues.append(_issue(
-                        "warn", "episodeScene", es_id,
-                        f"鏡頭的 beatIds 串接順序與劇本不同（合約 V1）：{detail}；"
-                        f"每顆 beat 都剛好被演到一次，補洞鏡 {('、'.join(backfill_ids) or '無')} 依劇本位置插在場次中間。"
-                        f"要讓鏡號順序完全等於劇本，請用 force 重建這一場。",
-                        label))
-                else:
-                    issues.append(_issue(
-                        "error", "episodeScene", es_id,
-                        f"鏡頭的 beatIds 串接（依鏡號）與劇本 beats 不一致（合約 V1）：{detail}",
-                        label))
+                    detail = (("重複引用：" + "、".join(dup)) if dup
+                              else ("多出不在劇本的 beat：" + "、".join(extra)))
+                issues.append(_issue(
+                    "error", "episodeScene", es_id,
+                    f"鏡頭的 beatIds 串接（依鏡號）與劇本 beats 不一致（合約 V1）：{detail}",
+                    label))
 
             # ── V5 職責一致 ──
             first_shot_id = es_shots[0].get("id") if es_shots else None
@@ -602,16 +579,10 @@ def _validate_storyboard_contract(data: dict, fps: int) -> list[dict]:
                     issues.append(_issue("error", "shot", s.get("id"),
                                          "role=dialogue 但這一鏡沒有引用任何 dialogue beat（合約 V5）", nm))
                 if role == "establish" and s.get("id") != first_shot_id:
-                    # M16a：補洞鏡插在場次前面時，原本的 establish 可能退到第二鏡。
-                    # 這條只在真的排錯時報；若 role 明確標了「補洞鏡」以外的來源（手動／舊資料），
-                    # 提示改 role 就好——擋住補鏡會讓使用者永遠補不完（本輪的整段需求）。
-                    if _s(s.get("fillReason")) == "backfill":
-                        issues.append(_issue("error", "shot", s.get("id"),
-                                             "role=establish 只能用在場次第一鏡（合約 V5）", nm))
-                    else:
-                        issues.append(_issue("warn", "shot", s.get("id"),
-                                             "role=establish 只能用在場次第一鏡（合約 V5）；"
-                                             f"建議改成 {'dialogue' if dlg_refs else 'action'}", nm))
+                    # 不放寬：establish 只能場次第一鏡。補洞時 backfill_shots 自己會把補洞鏡的
+                    # establish 降級成 dialogue/action，校驗端不需要為補洞開後門。
+                    issues.append(_issue("error", "shot", s.get("id"),
+                                         "role=establish 只能用在場次第一鏡（合約 V5）", nm))
                 if role == "establish" and dlg_refs:
                     issues.append(_issue("error", "shot", s.get("id"),
                                          f"role=establish 不得含台詞，但引用了 {len(dlg_refs)} 句（合約 V5）", nm))
