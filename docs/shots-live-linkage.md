@@ -115,3 +115,38 @@
 - 不改既有欄位名、不刪既有 API；新增欄位一律「選用、缺了自動補」。
 - 不自動刪任何鏡頭或媒體檔。
 - 不 push、不發 Release、不動 `dist/StoryVideoStudio/projects`。
+
+---
+
+## 8. 修訂 v1.1（2026-11-24，主代理複驗後）
+
+**8.1 D2 的三段判定（取代 §2 的「僅當」寫法）**——舊版前端改過的字沒有 `promptEnManual` 旗標，
+若照舊覆蓋會直接吃掉使用者的手改稿（實測 sh10 1881 字 → 被換成 2596 字、主體從「塞蕾娜」變「林恩」）：
+
+1. `promptEnManual === true` → 保留。
+2. `promptEn` 非空 **且 ≠ 本次算出的 compiled** **且無旗標** → **採認為手寫稿**：設
+   `promptEnManual = true`、保留原值、`derived.promptSource = "manual"`、`derived.promptEnStale = true`、
+   `derived.adoptedManual = true`。
+3. `promptEn` 為空 或 ＝ compiled → 寫入 compiled。
+4. **例外**：`derivedFrom == "deploy"` 且存檔值是部署短草稿（<800 字且不含 `<Picture`）→ 照舊自動覆蓋
+   （不然廢稿會被凍結成「手寫稿」，使用者永遠拿不到編譯稿）。
+
+> 呼叫端注意：任何 **部分欄位** 的 PUT（沒帶 `promptEn`）會讓上次編譯稿被誤採認為手寫稿。
+> 目前 `PUT /api/projects/{slug}` 一律收整份專案，新增任何 partial 寫入端點前必須先讀本節。
+
+**8.2 `backfill_shots()` 的排序鐵律**（實測踩到，會害補鏡被擋）：
+
+- 補洞鏡依「第一個 beat 在劇本中的位置」插入。
+- **沒有 `beatIds` 的既有鏡（手動／重複／孤兒）一律排在該場次所有「有 beatIds 的鏡」之後**，
+  組內維持原相對順序。曾經把它們排在最前面 → `sh25–sh28` 從 no=5…8 跳到 no=1…4，
+  原本的 `sh01(establish)` 變成第 5 鏡 → 合約 V5 必然報 error → `/storyboard/build` 回 400 擋下補鏡。
+- **既有鏡頭彼此之間的相對順序不得改變**（除了新插入的補洞鏡造成的位移）。
+
+**8.3 驗收追加**
+
+| # | 斷言 |
+|---|---|
+| T9 | 「非空、無旗標、≠ compiled」的鏡（實測 sh10）存檔後字串**完全等於存檔前**、`promptEnManual=true`、`derived.adoptedManual=true`；「非空、＝ compiled」的鏡（實測 sh07）維持原值且未被誤標 |
+| T10 | `backfill_shots()` 後 V1 不得以 warn 出現（要嘛不報、要嘛 error）；六場 `chain == want` |
+| T11 | `backfill_shots()` 前後，**既有鏡頭**在陣列中的相對順序不變；`beatIds` 為空的既有鏡排在該場次有 beatIds 的鏡之後 |
+
