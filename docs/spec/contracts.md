@@ -183,5 +183,5 @@ H3 產出已是 h264+aac 24fps（§3 實測），M6 走方案 A 即可。
 - .mmxpack 匯入/匯出 HTTP 端點未實際打過（需 ComfyUI 前端或手動 POST）；規格以 pack.py 原始碼為準。
 - 導演台「多段 batch」（segments 多段一次生成）未實跑；§3 只驗證單段。
 - 本機 ComfyUI 是我（M0）啟動的（port 8000 原本沒在跑），勘察完**保持運行中**；M1 之後若要常駐，用 §0 指令或寫進 start.bat。
-- docs/data-model.md 主代理已寫好 v0.1（99 行），M0 未動它；其 `shots[].durationFrames` 與 contracts §3 的 17k+1 影格對齊規則一致，可直接沿用。
+- docs/spec/data-model.md 主代理已寫好 v0.1（99 行），M0 未動它；其 `shots[].durationFrames` 與 contracts §3 的 17k+1 影格對齊規則一致，可直接沿用。
 - extra_model_paths.yaml 被我加了一段 custom_nodes_local（備份 .m0bak）；ComfyUI Desktop 正常啟動是否也吃這段未驗證。

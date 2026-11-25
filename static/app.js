@@ -1678,7 +1678,7 @@ function esLabel(es) {
   return `${es.title || "（未命名場次）"}（${es.id}）`;
 }
 
-// ── M14a：分鏡契約（docs/storyboard-contract.md v1）前端配套 ─────────
+// ── M14a：分鏡契約（docs/spec/storyboard-contract.md v1）前端配套 ─────────
 // role 六種（契約 §2）；顯示名與後端 app/storyboard.py 的 ROLE_LABEL 一致。
 const SB_ROLE_LABEL = {
   establish: "建立鏡", dialogue: "對白鏡", reaction: "反應鏡",
@@ -2135,7 +2135,7 @@ function renderScript() {
 // ══════════════════════════════════════════════════════════
 // 鏡頭分頁
 // ══════════════════════════════════════════════════════════
-// spec.shotType 的合法值是英文（docs/data-model.md v0.2；後端 storage.shot_type_en 也照這個轉），
+// spec.shotType 的合法值是英文（docs/spec/data-model.md v0.2；後端 storage.shot_type_en 也照這個轉），
 // 顯示翻中文。舊資料若存中文（0.2 之前）用 SHOT_TYPE_ALIAS 轉回來，不要顯示「引用已失效」。
 const SHOT_TYPES = [
   { value: "close_up", text: "特寫（close_up）" },
@@ -2151,7 +2151,7 @@ function normShotType(v) {
   const s0 = String(v || "").trim();
   return SHOT_TYPE_ALIAS[s0] || s0;
 }
-// v0.2：spec.angle = {h, v, s}（見 docs/data-model.md）
+// v0.2：spec.angle = {h, v, s}（見 docs/spec/data-model.md）
 const ANGLE_H = [
   ["front", "正面（front）"], ["front_left", "左前（front_left）"], ["left", "左側（left）"],
   ["back_left", "左後（back_left）"], ["back", "背面（back）"], ["back_right", "右後（back_right）"],
@@ -3737,7 +3737,7 @@ function sbBuildPanel() {
   const card = el("div", { class: "card sb-panel" });
   card.append(el("div", { class: "card-head" },
     el("h3", { text: "🎬 由劇本自動分鏡" }),
-    el("span", { class: "hint", text: "依 docs/storyboard-contract.md：一鏡一事件、長度吸附 H3 合法格、台詞逐字照抄（純規則，不呼叫模型）" }),
+    el("span", { class: "hint", text: "依 docs/spec/storyboard-contract.md：一鏡一事件、長度吸附 H3 合法格、台詞逐字照抄（純規則，不呼叫模型）" }),
   ));
   const scopeSel = el("select", { class: "inline-select" },
     el("option", { value: "all", text: "全部場次" }),
@@ -3897,7 +3897,7 @@ function renderShots() {
       el("span", { class: "spacer" }),
       el("button", {
         class: "btn btn-small btn-primary", type: "button", id: "btn-sb-build",
-        title: "依 docs/storyboard-contract.md 把劇本 beats 派生成分鏡（純規則，不呼叫模型）",
+        title: "依 docs/spec/storyboard-contract.md 把劇本 beats 派生成分鏡（純規則，不呼叫模型）",
         onclick: () => { sbState.panel = !sbState.panel; if (sbState.panel) sbState.result = null; renderShots(); },
       }, "🎬 由劇本自動分鏡"),
       el("button", { class: "btn btn-small", type: "button", title: "跑機械校驗（含分鏡契約 V1–V5；純邏輯，零 API 成本）", onclick: () => runValidate() }, "✓ 檢查全專案"),
@@ -3974,7 +3974,7 @@ function renderShots() {
   loadStoryboardRows();
 }
 
-// ── M16a：鏡頭卡上的「衍生值摘要」（docs/shots-live-linkage.md §5-3）────────
+// ── M16a：鏡頭卡上的「衍生值摘要」（docs/spec/shots-live-linkage.md §5-3）────────
 // 畫面上的字必須等於 GET 回的字、也等於送件口重編譯的字；這一行就是給人一眼確認的憑據。
 function sbDerivedLine(sh) {
   const d = sh.derived;

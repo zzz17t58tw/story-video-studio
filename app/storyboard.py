@@ -1,6 +1,6 @@
 """M14a：規則式分鏡層（劇本 beats → shots）。零模型呼叫、零 ComfyUI。
 
-規格：`docs/storyboard-contract.md` v1（權威）。這裡只做契約允許的三件事——
+規格：`docs/spec/storyboard-contract.md` v1（權威）。這裡只做契約允許的三件事——
 **挑選、分組、決定鏡位與長度**；台詞一字不改、不新增動作（鐵則 S1／L4）。
 
 三層關係：
@@ -655,7 +655,7 @@ def build_project_storyboard(project: dict, scene_ids: list[str] | None = None,
 
 
 def backfill_shots(project: dict, scene_ids: list[str] | None = None) -> dict:
-    """M16a：只為「沒有任何鏡頭引用」的 beat 補新鏡（D4 的處方；docs/shots-live-linkage.md §3）。
+    """M16a：只為「沒有任何鏡頭引用」的 beat 補新鏡（D4 的處方；docs/spec/shots-live-linkage.md §3）。
 
     為什麼不是整場重建：重建會換掉使用者調過的非手動鏡（鏡位、長度、promptEn 全歸零），而且
     既有鏡頭的 beatIds 會重排——使用者只想要「漏掉的那句」有鏡頭，不想整個場次被重做。

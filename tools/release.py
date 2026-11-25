@@ -43,7 +43,7 @@ CLEAN_DIR = RELEASE_DIR / NAME            # 乾淨版資料夾
 SEED_PROJECT = "project-20261118-022129"  # 《雨夜的便利商店》＝品質基準專案
 VERSION_FILE = ROOT / "VERSION"
 CHANGELOG = ROOT / "CHANGELOG.md"
-NOTES_DIR = ROOT / "docs"
+NOTES_DIR = ROOT / "docs" / "release"
 REQUIRED_CLEAN_TOP = ["StoryVideoStudio.exe", "_internal", "projects", "使用說明.txt"]
 # --skip-build 時，打包產物允許的最大時效（小時）。dist 裡的 projects 一旦被刪就回不來，
 # 舊產物每多留一天，就多一天「有人以為 --skip-build 會重新打包」的誤解風險。
@@ -235,7 +235,7 @@ def rebuild_clean(version: str) -> Path:
     n_proj = count_dirs(CLEAN_DIR / "projects")
     info(f"projects → 只有 {n_proj} 個專案（{SEED_PROJECT}）")
 
-    usage_src = ROOT / "docs" / "使用說明.txt"
+    usage_src = ROOT / "docs" / "usage" / "使用說明.txt"
     if usage_src.is_file():
         shutil.copy2(usage_src, CLEAN_DIR / "使用說明.txt")
     elif (RELEASE_DIR / "使用說明.txt").is_file():
@@ -251,13 +251,13 @@ def rebuild_clean(version: str) -> Path:
             "4. 要生成圖片或影片，請先啟動你自己的 ComfyUI（:8000）。\n"
             "5. 已知限制見程式內設定頁與 CHANGELOG.md。\n",
             encoding="utf-8")
-        info("找不到 docs/使用說明.txt，已寫入最小說明檔")
+        info("找不到 docs/usage/使用說明.txt，已寫入最小說明檔")
     info("使用說明.txt ✓")
     # v0.9.21：使用者要求「每次網路端更新都要到最新」——說明檔必須是這一版的，
     # 不准沿用舊檔（乾淨版曾發生 exe 一路升到 0.9.21、說明還停在 11/18 的情況）。
     _u = (CLEAN_DIR / "使用說明.txt").read_text(encoding="utf-8", errors="ignore")
     if f"v{version}" not in _u:
-        fail(f"使用說明.txt 沒有寫到「v{version}」：docs/使用說明.txt 的版本行忘了更新。"
+        fail(f"使用說明.txt 沒有寫到「v{version}」：docs/usage/使用說明.txt 的版本行忘了更新。"
              f"乾淨版的說明會跟程式對不上，先改那份再重跑。")
     info(f"使用說明.txt 版本戳 v{version} ✓")
 
@@ -377,7 +377,7 @@ def commit(version: str, allow_dirty: bool) -> None:
     msg = (f"release: v{version} 同步使用端 exe＋重建乾淨版\n\n"
            f"- 打包 StoryVideoStudio onedir 並同步到 dist/StoryVideoStudio（projects 未動）\n"
            f"- 重建 release 乾淨版（只含 {SEED_PROJECT}＋使用說明）並壓 zip\n"
-           f"- 產生 docs/RELEASE-NOTES-v{version}.md（大小與 sha256）")
+           f"- 產生 docs/release/RELEASE-NOTES-v{version}.md（大小與 sha256）")
     git("-c", "core.safecrlf=false", "commit", "-m", msg, check=True)
     info(f"commit 完成：{git_head_subject()}")
     info(f"本次提交 {len(staged)} 個檔案")
@@ -460,7 +460,7 @@ def main() -> int:
         zip_sha = sha256(zip_path)
 
     # 6) 發佈紀錄
-    step(6, "寫發佈紀錄 docs/RELEASE-NOTES-v%s.md" % version)
+    step(6, "寫發佈紀錄 docs/release/RELEASE-NOTES-v%s.md" % version)
     exe_sha = sha256(BUILD_DIR / f"{NAME}.exe")
     notes = write_notes(version, exe_sha, zip_path, zip_sha, zip_size, Path(bak).name, build_time)
     info(f"exe sha256 = {exe_sha}")

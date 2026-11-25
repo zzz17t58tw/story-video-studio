@@ -2,7 +2,7 @@
 
 只用 httpx（已裝）。所有錯誤訊息一律中文、可直接顯示給使用者，呼叫端不需要自己翻。
 
-契約依據 docs/contracts.md §4（Qwen 2.1 payload）與 ComfyUI 內建 HTTP API：
+契約依據 docs/spec/contracts.md §4（Qwen 2.1 payload）與 ComfyUI 內建 HTTP API：
   GET  /system_stats          可用性與 VRAM
   POST /upload/image          multipart（image=檔案, overwrite=true）→ {"name": "...", "subfolder": "", "type": "input"}
   POST /prompt                {"prompt": {nodeId: {class_type, inputs}}} → {"prompt_id": "..."}

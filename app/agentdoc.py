@@ -40,12 +40,12 @@ HARD_LIMITS: list[dict[str, str]] = [
     {"id": "prompt_rules", "rule": "H3 用六段式（1. Subject / 2. Action / 3. Camera / 4. Lighting / 5. Atmosphere / 6. Audio）；MOSS 禁 quality tag 與編號式開頭",
      "meaning": "送件口會硬驗；不合格會自動改用模板編譯稿或直接拒送", "where": "app/promptrules.py、GET /api/prompt-rules"},
     {"id": "beats_truth", "rule": "劇本 beats 是唯一真相；分鏡只能挑選/分組，不得改寫台詞",
-     "meaning": "要改台詞回劇本層改，改分鏡的台詞會被驗證擋下", "where": "docs/storyboard-contract.md"},
+     "meaning": "要改台詞回劇本層改，改分鏡的台詞會被驗證擋下", "where": "docs/spec/storyboard-contract.md"},
     {"id": "gpu_serial", "rule": "本機只有一張 GPU：生圖/生影片/本地 LLM 不能同時跑",
      "meaning": "要跑生成前先卸載本地 LLM；批次任務是「依序」不是並行", "where": "POST /api/gpu/release-comfy、/api/gpu/stop-llama"},
 ]
 
-# ── 資料模型（給 agent 的骨架說明；完整欄位見 docs/data-model.md）──────
+# ── 資料模型（給 agent 的骨架說明；完整欄位見 docs/spec/data-model.md）──────
 DATA_MODEL: list[dict[str, Any]] = [
     {"path": "meta", "fields": "id, title, createdAt, updatedAt, fps(預設 24), version", "note": "所有寫入都要更新 updatedAt"},
     {"path": "story", "fields": "synopsis, premise, style{genre,tone,visualStyle,negative}, chapters[]",
@@ -301,7 +301,7 @@ def manifest(app: Any, *, version: str = "", extra: dict[str, Any] | None = None
         "forbidden": FORBIDDEN,
         "routes": routes_doc(app),
         "schemas": schemes,
-        "contracts": {"storyboard": "docs/storyboard-contract.md", "dataModel": "docs/data-model.md"},
+        "contracts": {"storyboard": "docs/spec/storyboard-contract.md", "dataModel": "docs/spec/data-model.md"},
         **(extra or {}),
     }
 

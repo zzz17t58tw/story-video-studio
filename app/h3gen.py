@@ -1,6 +1,6 @@
 """M5a：單鏡生影片 — 導演台 r2v timeline 組裝、送件、背景監看、下載 mp4 回填鏡頭卡。
 
-依據 docs/contracts.md §3（已實測跑通的 H3 送件路徑）：
+依據 docs/spec/contracts.md §3（已實測跑通的 H3 送件路徑）：
 
   templates/h3_director_r2v.ui.json 是 **UI 格式**（nodes[].widgets_values 陣列），不是 API 格式；
   送件前要自己轉成 API 格式（{nodeId: {class_type, inputs}}）：

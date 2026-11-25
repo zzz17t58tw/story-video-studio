@@ -2,12 +2,12 @@
 
 **本模組不呼叫任何模型 API**（零 token、離線可跑）。規格見：
 
-- docs/data-model.md v0.2「shots[] 追加」的 referencePlan 結構與「機械校驗」五條。
-- docs/research-existing-tools.md §3-B（MSB 六段式與 `<Picture N>` 硬規則）：
+- docs/spec/data-model.md v0.2「shots[] 追加」的 referencePlan 結構與「機械校驗」五條。
+- docs/dev/research-existing-tools.md §3-B（MSB 六段式與 `<Picture N>` 硬規則）：
   1. 每個 subject 都要在 detailed_description 被點名；
   2. `<Picture i>` 序號由程式決定（這裏就是 slots 的 ordinal），模型不得自寫；
   3. `<Picture N>` 只看這次真的送進去的圖（slots），不超範圍。
-- docs/contracts.md §3：`total_frames` 需 17k+1 對齊（H3 合法格 17k+5）。
+- docs/spec/contracts.md §3：`total_frames` 需 17k+1 對齊（H3 合法格 17k+5）。
 
 對外函式：
   build_reference_plan(data, shot) -> (referencePlan, warnings)
@@ -849,7 +849,7 @@ def _now() -> str:
     return datetime.now(ZoneInfo("Asia/Taipei")).isoformat(timespec="seconds")
 
 
-# ── 4. M16a：衍生值重算（docs/shots-live-linkage.md §1–§2）──────────
+# ── 4. M16a：衍生值重算（docs/spec/shots-live-linkage.md §1–§2）──────────
 # 真相（A 類）＝劇本 beats／人物／場景／分鏡決策；衍生（B 類）＝referencePlan／promptEn／
 # dialogLineRefs／覆蓋狀態／孤兒判定。核心規則：畫面上的字＝API 回的字＝實際送出的字。
 # 所以「讀」與「寫」兩端都要呼叫 refresh_derived（讀端在 deepcopy 上算、不寫檔）。
@@ -906,7 +906,7 @@ def refresh_derived(project: dict) -> dict:
     - D1 referencePlan：沿用 build_reference_plan（不重寫邏輯）。
     - D3 dialogLineRefs：以 dialogBeatIds 對照該場次台詞順序重算（無 dialogBeatIds 的舊資料
       保留原值，不然會把使用者填的舊編號清成空）。
-    - D2 promptEn：三段判定（保護使用者手工成果，見 docs/shots-live-linkage.md §1）
+    - D2 promptEn：三段判定（保護使用者手工成果，見 docs/spec/shots-live-linkage.md §1）
         1. promptEnManual=true → 保留（永不自動覆蓋）。
         2. promptEn 非空、與這次算出的 compiled 不同、且沒有旗標 → **採認為手寫稿**：
            設 promptEnManual=true、保留原值、promptSource=manual、promptEnStale=true、adoptedManual=true。

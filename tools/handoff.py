@@ -7,7 +7,7 @@
     python tools/handoff.py check [分支名|all]
     python tools/handoff.py brief <分支名>
 
-規則見 docs/BRANCH-WORKFLOW.md。
+規則見 docs/dev/BRANCH-WORKFLOW.md。
 本工具除了 new 之外皆為唯讀，不會修改你的程式碼或 git 狀態。
 """
 
@@ -202,7 +202,7 @@ def check_one(d: dict) -> list[str]:
 
     # 契約檔保護
     contract_sec = d["sections"].get("是否動到契約（data-model.md / contracts.md）", "")
-    touched = [f for f in files if f in ("docs/data-model.md", "docs/contracts.md")]
+    touched = [f for f in files if f in ("docs/spec/data-model.md", "docs/spec/contracts.md")]
     if touched and "主對話" not in contract_sec and "核准" not in contract_sec:
         problems.append(f"動到契約檔 {touched} 但未註明主對話核准")
     return problems

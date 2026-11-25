@@ -1,6 +1,6 @@
 """M6：把各鏡頭的影片合併成一支長片（final_<時間戳>.mp4）。
 
-依據 docs/contracts.md §5：
+依據 docs/spec/contracts.md §5：
   · 方案 A（優選）：各段參數已統一（同 codec/pix_fmt/fps/解析度/音訊取樣率）→ 直接 `-f concat -c copy`，
     零轉碼；參數不同卻硬 copy 會造成時間戳錯位（實測 2.52s ≠ 2.0s）。
   · 方案 B（兜底）：參數不一致 → `filter_complex` 現場統一（scale+pad+setsar+fps / aresample）再 concat。

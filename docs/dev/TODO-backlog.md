@@ -47,7 +47,7 @@
 | 2026-11-18 17:20 | 一鍵佈署 | 一鍵佈署目前**只建文字**：identityAnchors 的 4 個 Hex 若模型給非法值，會用關鍵詞推近似色（`deploy.guess_hex`），僅保證格式合法、不是精準取色。 | 低 |
 | 2026-11-18 17:20 | 一鍵佈署 | `storygen._run` 的重試策略本輪有改（attempts 可調、截斷會要求精簡重出）→ 一般「由故事生成劇本／鏡頭」也會受益，但行為與舊版不同，回歸時要留意。 | 低 |
 | 2026-11-18 17:40 | 一鍵佈署 | **本機 Qwen3.8-27B(Q2_K) 在長 JSON 上不穩**：實測 6 次完整佈署中 4 次需重試（字串中間截斷 3 次、漏引台詞 2 次、`dialogLineRefs` 用 beat 序號而非台詞序號 3 次）。已做三層防護：attempts=3＋截斷要求精簡重出、重複引用去重（警告）、漏引台詞自動補到台詞最少的鏡（警告）、`dialogLineRefs` 一律當 beat 序號解析。換更小模型或提高溫度時仍可能失敗，屆時考慮「每場分 2 批鏡頭」縮短單次輸出。 | 高 |
-| 2026-11-19 11:25 | 分支協作 | **`app/server.py`（1387 行）未拆 routes**：所有端點擠在單檔，兩個分支同時加路由必衝突。現階段靠「區段宣告法」撐（見 `docs/BRANCH-WORKFLOW.md` §3），待端點超過 ~60 個或衝突真的發生時拆成 `app/routes/*.py`（每個領域一檔）。 | 中 |
+| 2026-11-19 11:25 | 分支協作 | **`app/server.py`（1387 行）未拆 routes**：所有端點擠在單檔，兩個分支同時加路由必衝突。現階段靠「區段宣告法」撐（見 `docs/dev/BRANCH-WORKFLOW.md` §3），待端點超過 ~60 個或衝突真的發生時拆成 `app/routes/*.py`（每個領域一檔）。 | 中 |
 | 2026-11-19 11:25 | 分支協作 | **`static/app.js`（5383 行）未模組化**：同樣是合併衝突熱點。建議按頁面切（story / cast / script / shots / generate / settings）成多檔，用 ES module 或依序 `<script>` 載入（無 build 步驟前提）。拆檔屬結構性改動，要單獨一個里程碑做，不要夾在功能分支裡。 | 中 |
 | 2026-11-20 07:20 | 整理除錯 | ~~`/api/health` 的 `milestone` 與 `FastAPI(version)` 硬編碼舊里程碑（"M5b+M6"／"0.6-m5b-m6"），與 `VERSION` 對不上，驗收無法用 health 判斷版本~~ **已修**：新增 `app/version.py` 讀 `VERSION`，health 回 `version`／`milestone: v<版本>`／`paths`；spec 的 datas 補收 `VERSION`。 |
 | 2026-11-20 07:20 | 整理除錯 | ~~設定頁輪詢的 `/api/gpu/status`、`/api/llm/status` 在服務沒開時各卡 ~2 秒（本機對未監聽埠 TCP 拒絕要 ~2 秒）~~ **已修**：兩支都加唯讀探測快取（成功 5s／失敗 10s），GPU 動作後清快取。實測 ~2100ms → 2–9ms。 |

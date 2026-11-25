@@ -1,7 +1,7 @@
 """M3c：結構化一次生成（故事→整集劇本、場次→多鏡頭）＋時長估算。
 
 只組 prompt、呼叫模型、驗證結構；**不寫檔**（寫入一律走 storage.apply_bulk）。
-時長算式沿用 huobao-drama 的四條規則（docs/research-existing-tools.md §3-A，只抄規則文字）：
+時長算式沿用 huobao-drama 的四條規則（docs/dev/research-existing-tools.md §3-A，只抄規則文字）：
   1. 目標總時長 = 劇本字數 ÷ 500 字/分鐘
   2. 段落數 ≈ 總時長 ÷ 12 秒（±20%）
   3. 段落時長 ≥ 段內台詞字數 ÷ 4.5 字/秒 + 2 秒表演餘量

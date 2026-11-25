@@ -43,11 +43,17 @@
 
 ## 5. 文件地圖（本 repo）
 
+> 完整索引：**`docs/00-index.md`**（全部文件的位置與用途，含「新增文件該放哪」決策樹）。
+
 | 檔案 | 內容 |
 |---|---|
-| `docs/storyboard-contract.md` | 分鏡契約 v1（三層真相、長度規則、V1–V5）｜**動分鏡前必讀** |
-| `docs/data-model.md` | 完整資料模型與不變式 |
-| `docs/contracts.md` | H3 送件契約（影格網格、參數） |
+| `docs/00-index.md` | **文件總索引**（先看這份，再按需深入） |
+| `docs/spec/storyboard-contract.md` | 分鏡契約 v1（三層真相、長度規則、V1–V5）｜**動分鏡前必讀** |
+| `docs/spec/data-model.md` | 完整資料模型與不變式 |
+| `docs/spec/contracts.md` | H3 送件契約（影格網格、參數） |
+| `docs/spec/shots-live-linkage.md` | 鏡頭頁即時連動契約（真相／衍生分界） |
+| `docs/dev/` | 開發工程：分支規矩、版本規則、待辦、外部調查 |
+| `docs/testing/` | 夜間巡檢報告與驗收證據 |
 | `app/agentdoc.py` | 本 Agent 層的單一真相（`ROUTE_NOTES`／`HARD_LIMITS`／`RECIPES`／`FORBIDDEN`） |
 | `tools/check_agent_doc.py` | 文件完整度自檢：新增 API 沒寫說明會失敗 |
 

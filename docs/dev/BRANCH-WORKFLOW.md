@@ -20,9 +20,9 @@
 | 檔案 | 角色 | 誰能改 | 衝突怎麼判 |
 |---|---|---|---|
 | `PLAN.md` | 任務板：里程碑、狀態、進度紀錄 | **只有主對話** | 分支不准改，只能回報 |
-| `docs/data-model.md` | 資料契約：`project.json` schema、ID 規則 | **只有主對話** | 要加欄位 → 停工回報 |
-| `docs/contracts.md` | 外部契約：ComfyUI 導演台／Qwen payload／ffmpeg | **只有主對話** | 同上 |
-| `docs/TODO-backlog.md` | 發現的雜事停車場 | 任何分支都可追加 | 只准 append，不准刪別人的 |
+| `docs/spec/data-model.md` | 資料契約：`project.json` schema、ID 規則 | **只有主對話** | 要加欄位 → 停工回報 |
+| `docs/spec/contracts.md` | 外部契約：ComfyUI 導演台／Qwen payload／ffmpeg | **只有主對話** | 同上 |
+| `docs/dev/TODO-backlog.md` | 發現的雜事停車場 | 任何分支都可追加 | 只准 append，不准刪別人的 |
 
 **分支碰到的介面問題，一律「停工 → 回報 → 主對話改契約 → 重新分派」，不准在分支裡私自改介面。**
 這是合併爆掉的第一名原因：私自改簽章，會讓其他所有分支變成孤兒。
@@ -79,7 +79,7 @@ m<N><字母>-<短說明>       例：m10a-lora-ui、m11-batch-gen
 
 ---
 
-## 5. 收工交接單（`docs/handoff/<分支名>.md`）
+## 5. 收工交接單（`docs/handoff/`）
 
 用 `python tools/handoff.py new <分支名>` 產生，五個必填段：
 

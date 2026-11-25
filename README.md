@@ -1,6 +1,6 @@
 # Story Video Studio
 
-> **版本 0.9.0**（預發版）　·　版號來源 `VERSION`　·　變更紀錄 [`CHANGELOG.md`](CHANGELOG.md)
+> **版本 0.9.22**（預發版）　·　版號來源 `VERSION`　·　變更紀錄 [`CHANGELOG.md`](CHANGELOG.md)
 > 從「一句故事概念」走到「一條可播放的長影片」的個人測試專案。
 
 在單一程式裡完成：**故事 → 人物卡 → 場景卡 → 劇本（集／場／對白）→ 分鏡（六段式 prompt）→ 生圖 → 生影片（含音軌）→ 合併長片**。
@@ -148,7 +148,7 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 | `story-video-studio` | Hermes profile `skills/creative/story-video-studio/`（**不隨本 repo 散布**） | 本專案架構、派工紀律、建置與發佈流程、踩坑紀錄（`--noconfirm` 會清空 `dist`、H3 音訊 32 kHz、導演台 widgets 索引位移、CLIPLoader 靜默回退…） |
 | `comfyui-*` 系列 | 同上 | ComfyUI 送件契約、模型家族查詢、加速堆疊等既有知識 |
 
-> 技能檔是開發過程的知識沉澱，含本機路徑與個人環境設定，因此不進公開 repo；需要的內容已整理進 `docs/`（`contracts.md`、`data-model.md`、`VERSIONING.md`）。
+> 技能檔是開發過程的知識沉澱，含本機路徑與個人環境設定，因此不進公開 repo；需要的內容已整理進 `docs/spec/`、`docs/dev/`（索引見 `docs/00-index.md`）。
 
 ### 4.3 執行時呼叫的模型
 | 用途 | 供應商／模型 | 來源 |
@@ -195,15 +195,26 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 app/          FastAPI 後端（storage / llm / comfy / imagegen / h3gen / deploy / assemble / h3compose）
 static/       前端（純 HTML/CSS/JS，無 build、無 CDN）
 templates/    ComfyUI 工作流模板（Qwen 生圖、MOSS 生圖、H3 導演台）
-docs/         契約與流程文件（data-model、contracts、BRANCH-WORKFLOW、VERSIONING、handoff/）
-tools/        release.py（一鍵打包發佈）、verify_release.py、handoff.py（分支交接單）、make_icon.py
+docs/         文件（分層見 docs/00-index.md）
+  ├─ spec/      程式規格：data-model、contracts、storyboard-contract、shots-live-linkage
+  ├─ dev/       開發工程：BRANCH-WORKFLOW、VERSIONING、DESKTOP、DEVLOG、調查、待辦
+  ├─ agent/     代理人：AGENT-GUIDE、agent-manifest（由 app/agentdoc.py 匯出）
+  ├─ handoff/   分支交接單
+  ├─ release/   每版 RELEASE-NOTES
+  ├─ testing/   夜間巡檢報告＋驗收證據
+  └─ usage/     使用說明（打包進乾淨版）
+tools/        開發與發佈工具：release.py（一鍵打包發佈）、verify_release.py、handoff.py、check_agent_doc.py、make_icon.py
+tests/        測試：test_live_linkage.py、check_deploy_scopes.py、mock_llm.py、nightly_audit.py
 launcher.py   桌面啟動器（pywebview + 內嵌 uvicorn）
 projects/     使用者資料（不進版控）
 ```
 
-- 資料模型：[`docs/data-model.md`](docs/data-model.md)
-- 下游 ComfyUI 契約（實測）：[`docs/contracts.md`](docs/contracts.md)
-- 分支協作規矩（多對話並行）：[`docs/BRANCH-WORKFLOW.md`](docs/BRANCH-WORKFLOW.md)
-- 版本與發佈：[`docs/VERSIONING.md`](docs/VERSIONING.md)
-- 開發歷程（M1–M3 詳細紀錄）：[`docs/DEVLOG-M1-M3.md`](docs/DEVLOG-M1-M3.md)
+> **文件總索引：[`docs/00-index.md`](docs/00-index.md)**（全部文件的位置與用途，新增文件時照它的決策樹放）
+
+- 資料模型：[`docs/spec/data-model.md`](docs/spec/data-model.md)
+- 下游 ComfyUI 契約（實測）：[`docs/spec/contracts.md`](docs/spec/contracts.md)
+- 分鏡契約：[`docs/spec/storyboard-contract.md`](docs/spec/storyboard-contract.md)
+- 分支協作規矩（多對話並行）：[`docs/dev/BRANCH-WORKFLOW.md`](docs/dev/BRANCH-WORKFLOW.md)
+- 版本與發佈：[`docs/dev/VERSIONING.md`](docs/dev/VERSIONING.md)
+- 開發歷程（M1–M3 詳細紀錄）：[`docs/dev/DEVLOG-M1-M3.md`](docs/dev/DEVLOG-M1-M3.md)
 - 主線與里程碑：[`PLAN.md`](PLAN.md)

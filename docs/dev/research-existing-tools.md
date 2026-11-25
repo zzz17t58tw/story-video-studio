@@ -229,7 +229,7 @@
 
 ---
 
-## 5. 結論 C：`docs/data-model.md` 建議補的欄位（5 項，按優先序）
+## 5. 結論 C：`docs/spec/data-model.md` 建議補的欄位（5 項，按優先序）
 
 > 只在這裡列建議，**未改動** `data-model.md`。
 

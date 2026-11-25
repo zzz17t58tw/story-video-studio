@@ -15,7 +15,7 @@
 
 一手來源（原始檔在專案內，改規則前先回去對）：templates/h3_director_r2v.ui.json、
 templates/moss_image_sft.ui.json、templates/qwen21_i2i_edit.api.json／qwen21_t2i.api.json，
-以及 docs/contracts.md §3（H3 導演台 timeline／`<Picture N>`／影格對齊）。
+以及 docs/spec/contracts.md §3（H3 導演台 timeline／`<Picture N>`／影格對齊）。
 
 對外函式：
   describe()                       -> [規則卡]（不含函式本體；給 GET /api/prompt-rules）
@@ -263,7 +263,7 @@ RULES: dict[str, dict[str, Any]] = {
         "id": "h3_video",
         "label": "MiniMax H3 影片（導演台 r2v，六段式）",
         "engine": "h3_video",
-        "source": "templates/h3_director_r2v.ui.json（MiniMaxH3Director）＋ docs/contracts.md §3",
+        "source": "templates/h3_director_r2v.ui.json（MiniMaxH3Director）＋ docs/spec/contracts.md §3",
         "rulesZh": [
             "六段式、每段以「數字. 標題」開頭：1. Subject definitions／2. Summary（動作）／"
             "3. Retention analysis / camera／4. Detailed description（光影、構圖）／"

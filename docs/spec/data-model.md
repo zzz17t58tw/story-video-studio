@@ -100,7 +100,7 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ---
 
-# v0.2 補充（2026-11-17 23:20，依 `docs/research-existing-tools.md` 結論）
+# v0.2 補充（2026-11-17 23:20，依 `docs/dev/research-existing-tools.md` 結論）
 
 > 全部為**向後相容**：舊專案讀進來時，缺的欄位由後端補預設值（不寫回除非使用者動到），不得因缺欄位而 400。
 
@@ -129,7 +129,7 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ## shots[] 追加／強化
 
-> ⚠️ **分鏡的權威規則見 `docs/storyboard-contract.md`**（2026-11-21）。本節只列欄位；「誰可以寫什麼、長度怎麼算、覆蓋怎麼驗」一律以該檔為準。
+> ⚠️ **分鏡的權威規則見 `docs/spec/storyboard-contract.md`**（2026-11-21）。本節只列欄位；「誰可以寫什麼、長度怎麼算、覆蓋怎麼驗」一律以該檔為準。
 
 ```jsonc
 "spec": {
@@ -164,7 +164,7 @@ ID 規則：`c01`,`sc01`,`e01`,`sh01`（前綴 + 兩位流水號，建立後不�
 
 ## 機械校驗（送生成前必跑，零 API 成本）
 
-> 分鏡相關的 V1–V5（順序覆蓋、台詞覆蓋、長度合法、台詞唸得完、職責一致）以 `docs/storyboard-contract.md` §4 為準，以下為其他項目。
+> 分鏡相關的 V1–V5（順序覆蓋、台詞覆蓋、長度合法、台詞唸得完、職責一致）以 `docs/spec/storyboard-contract.md` §4 為準，以下為其他項目。
 
 1. `dialogBeatIds` 覆蓋所屬場次全部 dialogue（每個 dialogue beat 剛好被一鏡引用），無漏、無重複；`dialogLineRefs` 由它換算，兩者不一致時以 `dialogBeatIds` 為準並自動重算。
 2. `promptEn` 內的 `<Picture N>` 必須與 `referencePlan.slots` 的 ordinal 一一對應且順序一致。

@@ -1132,7 +1132,7 @@ def api_storyboard_build(slug: str, body: StoryboardBuildBody):
     notes = storyboard.migrate_shot_fields(data)
     es_all = [es.get("id") for ep in ((data.get("script") or {}).get("episodes") or [])
               for es in (ep.get("scenes") or []) if es.get("id")]
-    # M16a（docs/shots-live-linkage.md §3）：預設只「補洞」——為沒有任何鏡頭引用的 beat 補新鏡，
+    # M16a（docs/spec/shots-live-linkage.md §3）：預設只「補洞」——為沒有任何鏡頭引用的 beat 補新鏡，
     # 既有鏡頭（含使用者調過的）完全不動。force=true 才走舊的全重建。
     backfill: dict = {"created": [], "skipped": [], "warnings": [], "scenes": {}}
     if not body.force:

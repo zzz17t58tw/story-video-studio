@@ -1,8 +1,8 @@
 # Story Video Studio（1117）
 
-> **版本：v0.9.0**（預發版）　·　版號來源：`VERSION`　·　**版本紀錄見 [`CHANGELOG.md`](CHANGELOG.md)**
+> **版本：v0.9.0**（預發版）　·　版號來源：`VERSION`　·　**版本紀錄見 [`CHANGELOG.md`](../../CHANGELOG.md)**
 >
-> 三個位置的分工、一鍵發佈流程與回滾方式見 [`docs/VERSIONING.md`](docs/VERSIONING.md)：
+> 三個位置的分工、一鍵發佈流程與回滾方式見 [`VERSIONING.md`](VERSIONING.md)：
 > 根目錄＝源碼｜`dist/StoryVideoStudio/`＝**你日常在用的 exe（資料在此，絕不清空 projects）**｜`release/`＝乾淨發佈包。
 > 發佈新版只要跑 `python tools/release.py`。
 
@@ -25,7 +25,7 @@
 ## 資料放哪
 
 ```
-projects/<slug>/project.json     ← 單一真相（UTF-8、縮排 2、camelCase，規格見 docs/data-model.md）
+projects/<slug>/project.json     ← 單一真相（UTF-8、縮排 2、camelCase，規格見 docs/spec/data-model.md）
 projects/<slug>/media/
     characters/ scenes/ shots/ clips/ voices/     ← 上傳的參考圖、音檔等
 projects/_trash/                                  ← 刪除的專案移到這裡（不直接刪檔）
@@ -80,9 +80,9 @@ projects/_trash/                                  ← 刪除的專案移到這�
 - 上傳後只改記憶體資料再走自動儲存；**移除參考圖只從卡片移除，實體檔案仍留在 `media/`**（避免誤刪共用圖）。
 
 ### 驗收截圖
-- `docs/shots/m2a-characters.png`：人物卡參考圖區（kind 下拉、鎖臉勾選、縮圖與 ✕）
-- `docs/shots/m2a-scenes.png`：場景卡與參考圖
-- `docs/shots/m2a-delete-warning.png`：刪人物時的引用警告框
+- `docs/testing/evidence/m2a-characters.png`：人物卡參考圖區（kind 下拉、鎖臉勾選、縮圖與 ✕）
+- `docs/testing/evidence/m2a-scenes.png`：場景卡與參考圖
+- `docs/testing/evidence/m2a-delete-warning.png`：刪人物時的引用警告框
 
 ## M2b 已做（劇本分頁 + 鏡頭分頁）
 
@@ -119,7 +119,7 @@ projects/_trash/                                  ← 刪除的專案移到這�
 - 鏡頭頁「拆成鏡頭草稿」e01s01 → 新增 2 鏡，`no` 連號 1–5、id 不重複、分組連續；尾幀上傳 → 寫入 API；上移後 `no` 重排正確；篩選 e01s02 只顯示 sh03。
 - 刪人物 c02 → 引用明細列出 8 處 → 確認後劇本／鏡頭頁顯示「（人物已刪除：c02）」引用清成 null，無錯誤。
 - `node --check static/app.js` → exit 0；`python -m compileall -q app` → exit 0。
-- 截圖：`docs/shots/m2b-script.png`（場次＋beats）、`docs/shots/m2b-shots.png`（工具列、分組、首幀縮圖、狀態徽章）。
+- 截圖：`docs/testing/evidence/m2b-script.png`（場次＋beats）、`docs/testing/evidence/m2b-shots.png`（工具列、分組、首幀縮圖、狀態徽章）。
 
 ### M2b 沒做（照計畫留給後續）
 - 鏡頭的生圖／生影片／合併（M4／M5／M6）；與模型對話改寫（M3）。本輪未碰 ComfyUI、未改 `contracts.md`／`data-model.md`／`PLAN.md`。
@@ -158,16 +158,16 @@ projects/_trash/                                  ← 刪除的專案移到這�
 
 ### 驗收（本輪實際跑出）
 - `GET /api/llm/status?slug=project-20261117-221919`（專案指向真實 8080、服務未開）→ **HTTP 200** `{"ok":false,…,"error":"連不上模型服務（127.0.0.1:8080）：請確認本機 LLM 已啟動…"}`（2.0 秒回）。
-- `GET /api/llm/status?baseUrl=http://127.0.0.1:8999/v1`（假 OpenAI 相容伺服器 `tools/mock_llm.py`）→ **HTTP 200** `{"ok":true,"baseUrl":"http://127.0.0.1:8999/v1","model":"mock-strata-7b","models":["mock-strata-7b","mock-strata-70b"]}`。
+- `GET /api/llm/status?baseUrl=http://127.0.0.1:8999/v1`（假 OpenAI 相容伺服器 `tests/mock_llm.py`）→ **HTTP 200** `{"ok":true,"baseUrl":"http://127.0.0.1:8999/v1","model":"mock-strata-7b","models":["mock-strata-7b","mock-strata-70b"]}`。
 - `POST /chat`（`task=story_outline`、`target={kind:story}`、`model:auto`）→ **HTTP 200**，`systemChars=828`、`usage.total_tokens=1171`；回覆前 200 字：「霧季第三天的清晨，小紅帽提著裝滿麵包的籃子，離開村口唯一一條通往森林的路。她從小就聽大人說，霧裡住著「替人保管秘密」的東西……」
 - `POST /chat/apply`（`character c01` / `appearance.promptEn` / replace）→ **HTTP 200**，`GET /api/projects/...` 與磁碟 project.json 都確認寫入、`meta.updatedAt` 更新；錯誤路徑（寫 `id`、不存在的人物、`mode=merge`、空 value、`style..genre`、寫到物件 `ambience`）全部 **400 + 中文**。
 - 瀏覽器：故事頁「① 擴寫成完整大綱」→ 送出 → 回覆出現 → 「套用到…故事大綱」→ 狀態列「已套用到 故事 的 synopsis」→ 左側大綱欄位即時更新；人物／場景抽屜的任務 chip 與套用欄位各自正確；把 baseUrl 改回 8080 後抽屜顯示紅點＋紅色橫幅，送訊息得到「⚠ 模型回覆失敗：連不上模型服務…」，畫面不白屏。
 - `node --check static/app.js` → exit 0；`python -m compileall -q app` → exit 0。
-- 截圖：`docs/shots/m3a-chat.png`（故事頁抽屜＋套用後）、`docs/shots/m3a-chat-offline.png`（模型未連線的紅色橫幅）。
+- 截圖：`docs/testing/evidence/m3a-chat.png`（故事頁抽屜＋套用後）、`docs/testing/evidence/m3a-chat-offline.png`（模型未連線的紅色橫幅）。
 
 ### M3a 沒做（留給後續）
 - 串流輸出、對話歷史持久化（重新整理就清空）、劇本／鏡頭頁的「與模型對話」（只做故事／人物／場景）、把回覆直接寫成章回陣列（目前章回是逐欄套用）。
-- 假模型伺服器 `tools/mock_llm.py` 只是驗證成功路徑用的開發工具，正式執行不會用到。
+- 假模型伺服器 `tests/mock_llm.py` 只是驗證成功路徑用的開發工具，正式執行不會用到。
 
 ## M1 已做
 - `app/storage.py`：`list_projects / create_project / load_project / save_project / delete_project / save_upload`；slug 防路徑穿越（只允許 `[a-z0-9_-]`）；頂層 key 齊全 + id 引用（sceneId / characterId / episodeSceneId / no 唯一）驗證；原子寫檔。
@@ -182,7 +182,7 @@ projects/_trash/                                  ← 刪除的專案移到這�
 
 - 「生成與合併」分頁：目前仍是 M4／M5／M6 佔位卡。（故事 M1、人物與場景 M2a、劇本與鏡頭 M2b 已實作）
 - 與模型對話（M3）、生圖（M4）、生影片（M5）、ffmpeg 合併（M6）、打包與設定頁（M7）。
-- M2a **未碰 ComfyUI**、未呼叫任何模型 API，也未改 `docs/contracts.md`、`docs/data-model.md`、`PLAN.md`。
+- M2a **未碰 ComfyUI**、未呼叫任何模型 API，也未改 `docs/spec/contracts.md`、`docs/spec/data-model.md`、`PLAN.md`。
 
 ## 現成範例專案
 

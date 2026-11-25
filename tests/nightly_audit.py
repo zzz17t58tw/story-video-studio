@@ -8,7 +8,7 @@
 
 輸出：
 - stdout = markdown 摘要（cron 會把這段注入 agent 的 prompt）
-- docs/nightly-audit/latest.json = 結構化結果（agent 要細看時讀它）
+- docs/testing/nightly-audit/latest.json = 結構化結果（agent 要細看時讀它）
 
 用法：
   .venv/Scripts/python.exe tools/nightly_audit.py            # 完整
@@ -269,7 +269,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    out_dir = ROOT / "docs" / "nightly-audit"
+    out_dir = ROOT / "docs" / "testing" / "nightly-audit"
     out_dir.mkdir(parents=True, exist_ok=True)
     blob = json.dumps(result, ensure_ascii=False, indent=2)
     (out_dir / "latest.json").write_text(blob, encoding="utf-8")
@@ -329,7 +329,7 @@ def main() -> int:
     L.append(f"- git {r.get('branch')} @ {r.get('head')} · ahead/behind {r.get('aheadBehind')} · 未提交 {len((r.get('statusShort') or '').splitlines())} 檔")
     unmerged = r.get("unmergedNightly") or []
     L.append("- 未合併的夜間分支：" + ("、".join(unmerged) if unmerged else "無"))
-    L.append(f"\n完整 JSON：docs/nightly-audit/{time.strftime('%Y-%m-%d')}.json")
+    L.append(f"\n完整 JSON：docs/testing/nightly-audit/{time.strftime('%Y-%m-%d')}.json")
 
     print("\n".join(L))
 

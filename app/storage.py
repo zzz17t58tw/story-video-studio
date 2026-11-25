@@ -1,7 +1,7 @@
 """專案資料存取層：projects/<slug>/project.json 為單一真相。
 
 所有寫入採「寫 .tmp → os.replace」的原子替換，並更新 meta.updatedAt。
-規格見 docs/data-model.md（key 一律 camelCase）。
+規格見 docs/spec/data-model.md（key 一律 camelCase）。
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def project_file(slug: str) -> Path:
 
 # ── M9：影片生成參數（settings.video）───────────────────────────
 # 預設值＝Pika Flex 官方建議（steps 6／cfg 1.0／shift 12-3／euler+simple／strength 1.0）。
-# 不改 docs/data-model.md，舊專案由 fill_project_defaults 讀取時補上（不寫回檔）。
+# 不改 docs/spec/data-model.md，舊專案由 fill_project_defaults 讀取時補上（不寫回檔）。
 VIDEO_LORA_PIKA_BF16 = "pika_h3_flex_ref2va_comfy_bf16.safetensors"
 
 
@@ -123,7 +123,7 @@ def video_settings(project: dict) -> dict:
 
 # ── 空白骨架 ────────────────────────────────────────────────────
 def blank_project(slug: str, name: str, aspect_ratio: str = "9:16") -> dict:
-    """依 docs/data-model.md 產生完整空白 project.json（所有頂層 key 都在，空陣列而非缺 key）。"""
+    """依 docs/spec/data-model.md 產生完整空白 project.json（所有頂層 key 都在，空陣列而非缺 key）。"""
     if aspect_ratio not in ASPECT_RATIOS:
         raise StorageError(f"畫面比例不合法：{aspect_ratio!r}（合法值：{'/'.join(ASPECT_RATIOS)}）")
     ts = now_iso()
@@ -357,7 +357,7 @@ def ensure_media_dirs(slug: str) -> None:
 
 
 # ── ID 產生器（M2a）────────────────────────────────────────────
-# 規則見 docs/data-model.md：c01 / sc01 / e01 / sh01（前綴 + 兩位流水號，建立後不可改）。
+# 規則見 docs/spec/data-model.md：c01 / sc01 / e01 / sh01（前綴 + 兩位流水號，建立後不可改）。
 ID_PREFIXES = {"characters": "c", "scenes": "sc"}
 _ID_RE = re.compile(r"^([a-z]+)(\d{2,})$")
 

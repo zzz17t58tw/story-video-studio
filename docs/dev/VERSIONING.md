@@ -33,7 +33,7 @@ python tools/release.py
    `dist/StoryVideoStudio/projects/` 完全不碰，發佈前後會比對專案數，數量不同就直接中止
 4. **重建乾淨版**：清空 `release/StoryVideoStudio/`，放入 exe＋`_internal/`＋`projects/project-20261118-022129`（雨夜便利商店）＋`使用說明.txt`
 5. 壓 `release/StoryVideoStudio-v<VERSION>-乾淨版.zip`
-6. 寫 `docs/RELEASE-NOTES-v<VERSION>.md`（版號、日期、build 時間、exe/zip 的 sha256 與大小、資料夾結構、本版變更摘要、驗證結果）
+6. 寫 `docs/release/RELEASE-NOTES-v<VERSION>.md`（版號、日期、build 時間、exe/zip 的 sha256 與大小、資料夾結構、本版變更摘要、驗證結果）
 7. `git add -A && git commit -m "release: v<VERSION> …"`
 
 常用開關：
@@ -63,7 +63,7 @@ python tools/release.py
 
 發佈新版的標準動作：**改 `VERSION` → 在 `CHANGELOG.md` 最上面加一節
 `## [x.y.z] - YYYY-MM-DD`（`新增`／`修正`／`已知限制` 三段）→ 跑 `python tools/release.py`**。
-腳本會把那一節抓進 `docs/RELEASE-NOTES-v<x.y.z>.md`，所以 CHANGELOG 沒寫就會在發佈紀錄裡看到「尚無段落」的提醒。
+腳本會把那一節抓進 `docs/release/RELEASE-NOTES-v<x.y.z>.md`，所以 CHANGELOG 沒寫就會在發佈紀錄裡看到「尚無段落」的提醒。
 
 ## 四、怎麼回滾
 
@@ -89,16 +89,16 @@ python tools/release.py           # 重新打包＋同步＋重建包
 ### 已經發佈出去的乾淨版
 
 下載者手上是 zip；回滾＝把舊 zip（`release/StoryVideoStudio-v<舊版>-乾淨版.zip`）重新發給他，
-或直接 `git checkout <舊commit>` 重建。舊 zip 若被覆寫，靠 git 的源碼 commit＋`docs/RELEASE-NOTES-*.md` 的雜湊比對確認版本。
+或直接 `git checkout <舊commit>` 重建。舊 zip 若被覆寫，靠 git 的源碼 commit＋`docs/release/RELEASE-NOTES-*.md` 的雜湊比對確認版本。
 
 ## 五、之後上 GitHub 的策略（下一版才會做）
 
 - **源碼進 repo**：這個根目錄就是 repo（`.gitignore` 已排除 `.venv/`、`build/`、`dist/`、`release/`、`projects/`、`memory/`、日誌、暫存）。
-  文件與 `docs/shots/` 截圖（`docs/` 共約 10MB）一併進 repo，作為驗收證據。
+  文件與 `docs/testing/evidence/` 截圖（`docs/` 共約 10MB）一併進 repo，作為驗收證據。
 - **exe 與 zip 不進 git 歷史**：每個 90MB 的 zip 進歷史會讓 repo 迅速膨脹且無法刪除。
   做法是 GitHub **Release 附件**：每個 tag（`v0.9.0`）附上 `StoryVideoStudio-v0.9.0-乾淨版.zip`，
-  正文貼 `docs/RELEASE-NOTES-v0.9.0.md`。
-- 建議的後續流程：`git tag -a v0.9.0 -m "…"` → push 分支與 tag → `gh release create v0.9.0 <zip> --notes-file docs/RELEASE-NOTES-v0.9.0.md`。
+  正文貼 `docs/release/RELEASE-NOTES-v0.9.0.md`。
+- 建議的後續流程：`git tag -a v0.9.0 -m "…"` → push 分支與 tag → `gh release create v0.9.0 <zip> --notes-file docs/release/RELEASE-NOTES-v0.9.0.md`。
 - 乾淨版要給別人，`projects/` 內的使用者資料**永不**進 repo（已在 `.gitignore` 固定排除，不是靠人記）。
 
 ## 六、本目錄相關檔案
@@ -109,5 +109,5 @@ python tools/release.py           # 重新打包＋同步＋重建包
 | `CHANGELOG.md` | Keep a Changelog 格式，繁中；發佈紀錄的內容來源 |
 | `tools/release.py` | 一鍵同步發佈（打包→同步 dist→重建 release→zip→紀錄→commit） |
 | `tools/verify_release.py` | 乾淨版解壓實測腳本 |
-| `docs/RELEASE-NOTES-v*.md` | 每次發佈的自動紀錄（雜湊、大小、結構、變更摘要） |
-| `docs/使用說明.txt` | 打進乾淨版的使用說明（給使用者看的） |
+| `docs/release/RELEASE-NOTES-v*.md` | 每次發佈的自動紀錄（雜湊、大小、結構、變更摘要） |
+| `docs/usage/使用說明.txt` | 打進乾淨版的使用說明（給使用者看的） |
