@@ -24,6 +24,7 @@
 | **測試證據** | `docs/testing/` | 夜間巡檢報告、驗收截圖、對照影片 | 程式碼 | 🔒 |
 | **版本紀錄** | `docs/release/` | 每版 RELEASE-NOTES、Release body | 規格變更的解釋（那是 spec 的事） | ✅ |
 | **交接** | `docs/handoff/` | 分支交接單（一分支一張） | 長期規格 | 🔒 |
+| **部門治理** | `docs/dept/` | 四部門的 AGENT.md（代理人契約）、BOARD.json（共用看板資料）、board.html（產生檔） | 公開文件 | 🔒 |
 | **使用者文件** | `docs/usage/` | 使用說明（會被打包進乾淨版） | 開發者文件 | ✅ |
 | **根入口** | `README.md` `AGENTS.md` `CHANGELOG.md` `VERSION` `.gitignore` | 說明、代理人入口、變更紀錄、版號、忽略清單 | — | ✅ |
 | **主線計畫** | `PLAN.md` | 北極星、里程碑、進度表 | — | 🔒 |
