@@ -1,8 +1,8 @@
 # ── 建置產物與環境（不進版控）────────────────────────────────
-.venv/
-build/
-dist/
-release/
+/.venv/
+/build/
+/dist/
+/release/
 __pycache__/
 *.pyc
 *.pyo
@@ -11,9 +11,9 @@ __pycache__/
 # ── 使用者資料（絕不進版控）──────────────────────────────────
 # 根目錄 projects/ 是開發主資料（10 專案、130MB），內容是實作成果，
 # 不放進 git 歷史；備份靠整資料夾複製，不靠 git。
-projects/
+/projects/
 # app/gpu.py 會把 GPU 設定寫到 ./memory/gpu-settings.json
-memory/
+/memory/
 
 # ── 日誌與暫存 ───────────────────────────────────────────────
 *.log
