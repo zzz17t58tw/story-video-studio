@@ -1,6 +1,6 @@
 # Story Video Studio — Agent 操作手冊
 
-版本 `0.9.7`｜文件版本 `1.0`｜端點 59 支（已說明 59）
+版本 `0.9.22`｜文件版本 `1.0`｜端點 59 支（已說明 59）
 
 ## 連線與版本
 
@@ -40,7 +40,7 @@
 |---|---|---|
 | `meta` | id, title, createdAt, updatedAt, fps(預設 24), version | 所有寫入都要更新 updatedAt |
 | `story` | synopsis, premise, style{genre,tone,visualStyle,negative}, chapters[] | chapters[]: {id, title, content} |
-| `characters[]` | id, name, aliases[], appearance{face,hair,body,skin,promptEn}, background{birth,personality,goal,secret}, voice{desc}, outfits[], identityAnchors{}, stages[] | identityAnchors 是「逐字貼進 prompt」的鎖臉錨點，不准改寫 |
+| `characters[]` | id, name, aliases[], appearance{age,gender,face,hair,body,skin,promptEn}, voice{desc}, outfits[], identityAnchors{}, stages[] | identityAnchors 是「逐字貼進 prompt」的鎖臉錨點，不准改寫 |
 | `scenes[]` | id, name, timeOfDay, lighting, mood, promptEn, props[] | 場景卡（地點），不含對白 |
 | `script.episodes[].scenes[]` | id(e01s01), title, sceneId, characterIds[], summary, beats[] | beats[] = {id(b01), type(dialogue|action), characterId, line, emotion, notes}；這是戲的唯一真相 |
 | `shots[]` | id, no, episodeSceneId, beatIds[], role, derivedFrom, padSec, durationSec, characterIds[], spec{}, promptZh, promptEn, referencePlan{}, images{first,last}, video{}, beats(停用), dialogue(停用), legacyBeats | beatIds 是主鍵；role ∈ establish/dialogue/reaction/action/insert/closing |
@@ -64,7 +64,7 @@
 
 1. POST /api/projects 建專案（或 GET /api/projects 挑一個）
 2. 故事層：POST /api/projects/{slug}/chat（target.kind=story）取得文字 → POST /chat/apply-batch 寫入 synopsis/chapters/style
-3. 人物層：POST /chat（kind=character）→ /chat/apply-batch 寫 appearance/outfits/background/voice
+3. 人物層：POST /chat（kind=character）→ /chat/apply-batch 寫入 appearance/outfits/voice
 4. 場景層：POST /chat（kind=scene）→ /chat/apply-batch 寫 desc/promptEn
 5. 劇本層：POST /generate/script（dryRun=true 先看）→ POST /apply/bulk 寫入 episodes/scenes/beats
 6. 分鏡層：POST /storyboard/build（scope=all）→ GET /storyboard 檢查台詞是否逐字、每鏡 5.17–15.08 秒
@@ -147,7 +147,7 @@
 | POST | `/api/projects/{slug}/chat` | 與模型對話（回文字，不改資料） | 要草稿：大綱／章回／外型／台詞變體 | 無寫檔（只回 reply） |
 | POST | `/api/projects/{slug}/chat/apply` | 把一段文字寫進單一欄位 | 只有一個欄位要改 | 寫檔（受契約守門） |
 | POST | `/api/projects/{slug}/chat/apply-batch` | 一次寫多個欄位（含整份 chapters/beats/dialogue/outfits） | 回填模型輸出、批次改資料 | 原子寫檔；新增契約 error → 整批不寫 |
-| POST | `/api/projects/{slug}/deploy` | 一鍵佈署：模型一次補齊劇本／分鏡／提示詞（4 次呼叫，1–3 分鐘） | 內容還很空、想快速成型 | 背景 job；會依情境覆寫，先看 deploy/info |
+| POST | `/api/projects/{slug}/deploy` | 一鍵佈署（**分範圍**）：body 的 scope=cast_locations（角色＋場景）／script（用現有卡片寫一集）／shots（為最新一集拆鏡頭）／all（四層全跑）；每次只呼叫該範圍需要的模型次數 | 內容還很空、想快速成型；建議照 角色與場景 → 劇本 → 分鏡 的順序分別按 | 背景 job；scope=script/shots 只清自己那層（script 會連鏡頭一起清），cast_locations 覆蓋時四層全清；先看 deploy/info |
 | GET | `/api/projects/{slug}/deploy/info` | 一鍵佈署前的情境資訊（已有多少內容、append 會怎麼編號） | 按一鍵佈署前 | 無 |
 | GET | `/api/projects/{slug}/deploy/latest` | Api Deploy Latest |  |  |
 | GET | `/api/projects/{slug}/deploy/{job_id}` | Api Deploy Status |  |  |
