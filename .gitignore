@@ -28,3 +28,12 @@ temp/
 #      docs/**/*.mp4
 
 docs/testing/nightly-audit/*.json
+
+# ── 不上傳（2026-11-25 使用者定案）────────────────────────────
+# 上傳範圍只有三種：①主程式 ②乾淨壓縮包（Release 附件）③代理人／技能資料。
+# 開發與測試、私人資料一律不上傳：本地保留，但不進版控、不 push。
+tests/
+tools/
+docs/testing/
+docs/handoff/
+PLAN.md
