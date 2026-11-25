@@ -191,30 +191,51 @@ python -m uvicorn app.server:app --host 127.0.0.1 --port 8788
 
 ## 專案結構
 
+> **上傳範圍**（2026-11-25 使用者定案）：本 repo 公開的部分只有「主程式 ＋ 公開文件 ＋ 代理人技能包」。
+> 開發與測試腳本、交接單、測試證據、主線計畫**留在本機、不上傳**（`.gitignore` 已排除，未追蹤）。
+
+### ✅ 會上傳
+
 ```
 app/          FastAPI 後端（storage / llm / comfy / imagegen / h3gen / deploy / assemble / h3compose）
 static/       前端（純 HTML/CSS/JS，無 build、無 CDN）
 templates/    ComfyUI 工作流模板（Qwen 生圖、MOSS 生圖、H3 導演台）
-docs/         文件（分層見 docs/00-index.md）
+assets/       圖示等靜態資源
+agent-skill/  代理人技能包：SKILL.md（外部 AI 接手本程式的公開技能卡）
+docs/         公開文件（分層見 docs/00-index.md）
+  ├─ 00-index.md  文件總索引（含上傳範圍標註）
   ├─ spec/      程式規格：data-model、contracts、storyboard-contract、shots-live-linkage
   ├─ dev/       開發工程：BRANCH-WORKFLOW、VERSIONING、DESKTOP、DEVLOG、調查、待辦
   ├─ agent/     代理人：AGENT-GUIDE、agent-manifest（由 app/agentdoc.py 匯出）
-  ├─ handoff/   分支交接單
-  ├─ release/   每版 RELEASE-NOTES
-  ├─ testing/   夜間巡檢報告＋驗收證據
-  └─ usage/     使用說明（打包進乾淨版）
-tools/        開發與發佈工具：release.py（一鍵打包發佈）、verify_release.py、handoff.py、check_agent_doc.py、make_icon.py
-tests/        測試：test_live_linkage.py、check_deploy_scopes.py、mock_llm.py、nightly_audit.py
+  ├─ usage/     使用說明（打包進乾淨版）
+  └─ release/   每版 RELEASE-NOTES
 launcher.py   桌面啟動器（pywebview + 內嵌 uvicorn）
-projects/     使用者資料（不進版控）
+StoryVideoStudio.spec  PyInstaller 打包設定
+start.bat / 啟動 Story Video Studio.bat  啟動腳本
+VERSION       版號單一真相
+README.md / AGENTS.md / CHANGELOG.md / .gitignore
 ```
+
+### 🔒 不上傳（本地保留）
+
+| 路徑 | 內容 | 為什麼不上傳 |
+|---|---|---|
+| `tests/` | 測試腳本、夜間巡檢實作、mock 服務 | 開發自用，含本機假設 |
+| `tools/` | 發版／交班／圖示／文件自檢腳本 | 開發與發佈流程工具 |
+| `docs/testing/` | 夜間巡檢報告、驗收截圖、對照影片 | 體積大且屬本機驗收證據 |
+| `docs/handoff/` | 分支交接單 | 開發內部協作紀錄 |
+| `PLAN.md` | 主線、里程碑、進度表 | 個人開發路線圖 |
+| `projects/` | 使用者資料（每個專案一個資料夾） | 私人創作內容 |
+
+> 上傳範圍由 `tools/check_publish_scope.py` 守門（掃 `git ls-files`，非白名單即 exit 1）；該工具本身也不上傳。
 
 > **文件總索引：[`docs/00-index.md`](docs/00-index.md)**（全部文件的位置與用途，新增文件時照它的決策樹放）
 
+- 代理人技能卡（公開版）：[`agent-skill/SKILL.md`](agent-skill/SKILL.md)
+- 代理人入門：[`AGENTS.md`](AGENTS.md)
 - 資料模型：[`docs/spec/data-model.md`](docs/spec/data-model.md)
 - 下游 ComfyUI 契約（實測）：[`docs/spec/contracts.md`](docs/spec/contracts.md)
 - 分鏡契約：[`docs/spec/storyboard-contract.md`](docs/spec/storyboard-contract.md)
 - 分支協作規矩（多對話並行）：[`docs/dev/BRANCH-WORKFLOW.md`](docs/dev/BRANCH-WORKFLOW.md)
 - 版本與發佈：[`docs/dev/VERSIONING.md`](docs/dev/VERSIONING.md)
 - 開發歷程（M1–M3 詳細紀錄）：[`docs/dev/DEVLOG-M1-M3.md`](docs/dev/DEVLOG-M1-M3.md)
-- 主線與里程碑：[`PLAN.md`](PLAN.md)
